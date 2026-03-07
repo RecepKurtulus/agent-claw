@@ -17,6 +17,7 @@ openclaw-orchestrator = { path = "../openclaw-orchestrator" }
 utils = { path = "../utils" }
 git = { path = "../git" }
 trusted-key-auth = { path = "../trusted-key-auth" }
+chrono = { version = "0.4", features = ["serde"] }
 tokio-util = { version = "0.7", features = ["io"] }
 serde_json = { workspace = true }
 anyhow = { workspace = true }

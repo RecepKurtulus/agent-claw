@@ -36,7 +36,7 @@ Sen → diff'i incele → onayla → merge
 - `openclaw-orchestrator::on_task_completed()` çağrılsın
 - Unblock olan task'lar tespit edilsin ve loglanısn
 
-### 1.2 QA Auto-Trigger
+### 1.2 QA Auto-Trigger ✅
 - EP tamamlandığında (run_reason = CodingAgent) otomatik QA başlatılsın
 - `openclaw-qa::start_qa()` çağrısı container service içine enjekte edilsin
 - QA geçerse → workspace "InReview" statüsüne çekilsin

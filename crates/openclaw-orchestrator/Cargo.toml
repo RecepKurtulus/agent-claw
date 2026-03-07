@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 openclaw-planner = { path = "../openclaw-planner" }
+openclaw-qa = { path = "../openclaw-qa" }
 db = { path = "../db" }
 services = { path = "../services" }
 utils = { path = "../utils" }

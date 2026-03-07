@@ -1,5 +1,8 @@
+use std::path::Path;
+
 use async_trait::async_trait;
 use db::DBService;
+use openclaw_qa::{OcQaRunner, QaOutcome, QaRunnerService, StartQaRequest};
 use sqlx::Row;
 use thiserror::Error;
 use uuid::Uuid;
@@ -12,18 +15,37 @@ pub enum HookError {
     Db(#[from] sqlx::Error),
     #[error(transparent)]
     Orchestrator(#[from] OrchestratorError),
+    #[error(transparent)]
+    Qa(#[from] openclaw_qa::QaError),
+}
+
+/// `trigger_oc_hook` tarafından döndürülen, container'ın ne yapması gerektiğini belirten sonuç.
+#[derive(Debug)]
+pub enum OcHookResult {
+    /// Workspace, OpenClaw tarafından yönetilmiyor — normal akış.
+    NotManaged,
+    /// Agent başarısız oldu; orchestrator bilgilendirildi.
+    AgentFailed,
+    /// QA geçti; `unblocked` içindeki task'lar artık çalışabilir.
+    QaPassed { unblocked: Vec<Uuid> },
+    /// QA başarısız; agent'a gönderilecek follow-up prompt.
+    QaFailed { follow_up_prompt: String },
+    /// QA max retry limitini aştı; insan müdahalesi gerekiyor.
+    QaExhausted { last_output: String },
+    /// Workspace dizininde test komutu bulunamadı; orchestrator bilgilendirildi.
+    QaSkipped { unblocked: Vec<Uuid> },
 }
 
 /// Agent tamamlandığında container service tarafından çağrılır.
-/// workspace_id üzerinden hangi orchestration task'ına ait olduğunu bulur
-/// ve orchestrator'ı tetikler.
 #[async_trait]
 pub trait OcHookService: Send + Sync {
     async fn on_coding_agent_completed(
         &self,
         workspace_id: Uuid,
+        execution_process_id: Uuid,
+        workspace_dir: &Path,
         success: bool,
-    ) -> Result<(), HookError>;
+    ) -> Result<OcHookResult, HookError>;
 }
 
 pub struct OcOrchestrationHook {
@@ -40,7 +62,6 @@ impl OcOrchestrationHook {
         &self,
         workspace_id: Uuid,
     ) -> Result<Option<(Uuid, Uuid)>, sqlx::Error> {
-        // (run_id, task_id) döner
         let row = sqlx::query(
             "SELECT run_id, task_id FROM oc_task_run_state
              WHERE workspace_id = ? AND status = 'running'
@@ -66,39 +87,21 @@ impl OcHookService for OcOrchestrationHook {
     async fn on_coding_agent_completed(
         &self,
         workspace_id: Uuid,
+        execution_process_id: Uuid,
+        workspace_dir: &Path,
         success: bool,
-    ) -> Result<(), HookError> {
+    ) -> Result<OcHookResult, HookError> {
         let Some((run_id, task_id)) = self.find_active_task_run(workspace_id).await? else {
-            // Bu workspace OpenClaw tarafından yönetilmiyor — normal akış
             tracing::debug!(
                 workspace_id = %workspace_id,
                 "No active OC task run for workspace, skipping hook"
             );
-            return Ok(());
+            return Ok(OcHookResult::NotManaged);
         };
 
         let orchestrator = OcOrchestrator::new(self.db.clone());
 
-        if success {
-            tracing::info!(
-                workspace_id = %workspace_id,
-                run_id = %run_id,
-                task_id = %task_id,
-                "Coding agent completed — notifying orchestrator"
-            );
-            let unblocked = orchestrator
-                .on_task_completed(run_id, task_id, None)
-                .await?;
-
-            if !unblocked.is_empty() {
-                tracing::info!(
-                    run_id = %run_id,
-                    unblocked_count = unblocked.len(),
-                    "Unblocked tasks: {:?}",
-                    unblocked
-                );
-            }
-        } else {
+        if !success {
             tracing::warn!(
                 workspace_id = %workspace_id,
                 run_id = %run_id,
@@ -106,9 +109,61 @@ impl OcHookService for OcOrchestrationHook {
                 "Coding agent failed — notifying orchestrator"
             );
             orchestrator.on_task_failed(run_id, task_id).await?;
+            return Ok(OcHookResult::AgentFailed);
         }
 
-        Ok(())
+        tracing::info!(
+            workspace_id = %workspace_id,
+            run_id = %run_id,
+            task_id = %task_id,
+            "Coding agent completed — running QA"
+        );
+
+        // QA'yı çalıştır
+        let qa_runner = OcQaRunner::new(self.db.clone());
+        let qa_result = qa_runner
+            .run_qa_and_record(workspace_id, execution_process_id, workspace_dir)
+            .await;
+
+        match qa_result {
+            Err(openclaw_qa::QaError::NoTestCommand(_)) => {
+                tracing::info!(
+                    workspace_id = %workspace_id,
+                    "No test command found — skipping QA, marking task completed"
+                );
+                let unblocked = orchestrator
+                    .on_task_completed(run_id, task_id, None)
+                    .await?;
+                return Ok(OcHookResult::QaSkipped { unblocked });
+            }
+            Err(e) => return Err(HookError::Qa(e)),
+            Ok(outcome) => match outcome {
+                QaOutcome::Passed => {
+                    tracing::info!(workspace_id = %workspace_id, "QA passed");
+                    let unblocked = orchestrator
+                        .on_task_completed(run_id, task_id, None)
+                        .await?;
+                    Ok(OcHookResult::QaPassed { unblocked })
+                }
+                QaOutcome::FailedRetry {
+                    follow_up_prompt, ..
+                } => {
+                    tracing::info!(
+                        workspace_id = %workspace_id,
+                        "QA failed — sending follow-up to agent"
+                    );
+                    Ok(OcHookResult::QaFailed { follow_up_prompt })
+                }
+                QaOutcome::Exhausted { last_output } => {
+                    tracing::warn!(
+                        workspace_id = %workspace_id,
+                        "QA exhausted retries — notifying orchestrator of failure"
+                    );
+                    orchestrator.on_task_failed(run_id, task_id).await?;
+                    Ok(OcHookResult::QaExhausted { last_output })
+                }
+            },
+        }
     }
 }
 
@@ -120,8 +175,10 @@ impl OcHookService for NoopOcHook {
     async fn on_coding_agent_completed(
         &self,
         _workspace_id: Uuid,
+        _execution_process_id: Uuid,
+        _workspace_dir: &Path,
         _success: bool,
-    ) -> Result<(), HookError> {
-        Ok(())
+    ) -> Result<OcHookResult, HookError> {
+        Ok(OcHookResult::NotManaged)
     }
 }

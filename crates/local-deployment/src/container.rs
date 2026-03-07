@@ -38,6 +38,7 @@ use executors::{
 };
 use futures::{FutureExt, TryStreamExt, stream::select};
 use git::GitService;
+use openclaw_orchestrator::{NoopOcHook, OcHookResult, OcHookService};
 use serde_json::json;
 use services::services::{
     analytics::AnalyticsContext,
@@ -51,7 +52,6 @@ use services::services::{
     remote_client::RemoteClient,
     remote_sync,
 };
-use openclaw_orchestrator::{NoopOcHook, OcHookService};
 use tokio::{sync::RwLock, task::JoinHandle};
 use tokio_util::io::ReaderStream;
 use utils::{
@@ -1081,7 +1081,9 @@ fn failure_exit_status() -> std::process::ExitStatus {
     }
 }
 
+impl LocalContainerService {
     /// CodingAgent EP tamamlandığında OpenClaw orchestration hook'unu tetikler.
+    /// QA sonucuna göre task'ı InReview'a çeker veya agent'a follow-up gönderir.
     /// Workspace OpenClaw tarafından yönetilmiyorsa sessizce geçer.
     async fn trigger_oc_hook(&self, ctx: &ExecutionContext) {
         if !matches!(
@@ -1096,18 +1098,164 @@ fn failure_exit_status() -> std::process::ExitStatus {
             ExecutionProcessStatus::Completed
         );
 
-        if let Err(e) = self
+        let workspace_dir = self.workspace_to_current_dir(&ctx.workspace);
+
+        let result = self
             .oc_hook
-            .on_coding_agent_completed(ctx.workspace.id, success)
+            .on_coding_agent_completed(
+                ctx.workspace.id,
+                ctx.execution_process.id,
+                &workspace_dir,
+                success,
+            )
+            .await;
+
+        match result {
+            Err(e) => {
+                tracing::warn!(
+                    workspace_id = %ctx.workspace.id,
+                    "OpenClaw hook error: {e}"
+                );
+            }
+            Ok(OcHookResult::NotManaged) => {}
+            Ok(OcHookResult::AgentFailed) => {
+                tracing::info!(workspace_id = %ctx.workspace.id, "OC: agent failed, orchestrator notified");
+            }
+            Ok(OcHookResult::QaSkipped { unblocked }) => {
+                tracing::info!(
+                    workspace_id = %ctx.workspace.id,
+                    unblocked_count = unblocked.len(),
+                    "OC: QA skipped (no test command), task completed"
+                );
+            }
+            Ok(OcHookResult::QaPassed { unblocked }) => {
+                tracing::info!(
+                    workspace_id = %ctx.workspace.id,
+                    unblocked_count = unblocked.len(),
+                    "OC: QA passed — marking task InReview"
+                );
+                self.mark_task_in_review(ctx.workspace.id).await;
+            }
+            Ok(OcHookResult::QaFailed { follow_up_prompt }) => {
+                tracing::info!(
+                    workspace_id = %ctx.workspace.id,
+                    "OC: QA failed — sending follow-up to agent"
+                );
+                self.start_oc_follow_up(ctx, follow_up_prompt).await;
+            }
+            Ok(OcHookResult::QaExhausted { last_output }) => {
+                tracing::warn!(
+                    workspace_id = %ctx.workspace.id,
+                    "OC: QA exhausted retries — human review required. Last output:\n{last_output}"
+                );
+            }
+        }
+    }
+
+    /// QA geçtiğinde Kanban'daki ilgili task'ı InReview statüsüne çeker.
+    async fn mark_task_in_review(&self, workspace_id: Uuid) {
+        let now = chrono::Utc::now();
+        match sqlx::query(
+            "UPDATE tasks SET status = 'inreview', updated_at = ? WHERE parent_workspace_id = ?",
+        )
+        .bind(now.to_rfc3339())
+        .bind(workspace_id.to_string())
+        .execute(&self.db.pool)
+        .await
+        {
+            Ok(result) if result.rows_affected() > 0 => {
+                tracing::info!(workspace_id = %workspace_id, "Task moved to InReview");
+            }
+            Ok(_) => {
+                tracing::debug!(
+                    workspace_id = %workspace_id,
+                    "No task found with parent_workspace_id — skipping InReview update"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(workspace_id = %workspace_id, "Failed to update task to InReview: {e}");
+            }
+        }
+    }
+
+    /// QA başarısız olduğunda agent'a follow-up prompt göndererek yeniden çalıştırır.
+    async fn start_oc_follow_up(&self, ctx: &ExecutionContext, follow_up_prompt: String) {
+        // Orijinal action'dan executor_config'i çıkar
+        let executor_config = match ctx.execution_process.executor_action() {
+            Ok(action) => match &action.typ {
+                ExecutorActionType::CodingAgentFollowUpRequest(r) => r.executor_config.clone(),
+                ExecutorActionType::CodingAgentInitialRequest(r) => r.executor_config.clone(),
+                _ => {
+                    tracing::warn!(
+                        workspace_id = %ctx.workspace.id,
+                        "OC follow-up: unsupported action type"
+                    );
+                    return;
+                }
+            },
+            Err(e) => {
+                tracing::warn!(workspace_id = %ctx.workspace.id, "OC follow-up: cannot parse executor_action: {e}");
+                return;
+            }
+        };
+
+        // Agent session id'sini bul (follow-up için gerekli)
+        let session_info = match CodingAgentTurn::find_latest_session_info(
+            &self.db.pool,
+            ctx.session.id,
+        )
+        .await
+        {
+            Ok(info) => info,
+            Err(e) => {
+                tracing::warn!(workspace_id = %ctx.workspace.id, "OC follow-up: cannot find session info: {e}");
+                return;
+            }
+        };
+
+        let working_dir = ctx
+            .session
+            .agent_working_dir
+            .as_ref()
+            .filter(|d| !d.is_empty())
+            .cloned();
+
+        let action_type = if let Some(info) = session_info {
+            ExecutorActionType::CodingAgentFollowUpRequest(CodingAgentFollowUpRequest {
+                prompt: follow_up_prompt,
+                session_id: info.session_id,
+                reset_to_message_id: None,
+                executor_config,
+                working_dir,
+            })
+        } else {
+            ExecutorActionType::CodingAgentInitialRequest(CodingAgentInitialRequest {
+                prompt: follow_up_prompt,
+                executor_config,
+                working_dir,
+            })
+        };
+
+        let action = ExecutorAction::new(action_type, None);
+
+        if let Err(e) = self
+            .start_execution(
+                &ctx.workspace,
+                &ctx.session,
+                &action,
+                &ExecutionProcessRunReason::CodingAgent,
+            )
             .await
         {
             tracing::warn!(
                 workspace_id = %ctx.workspace.id,
-                "OpenClaw hook error: {}",
-                e
+                "OC follow-up: failed to start execution: {e}"
             );
+        } else {
+            tracing::info!(workspace_id = %ctx.workspace.id, "OC follow-up: new execution started");
         }
     }
+}
 
 #[async_trait]
 impl ContainerService for LocalContainerService {

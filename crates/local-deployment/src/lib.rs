@@ -6,6 +6,7 @@ use db::DBService;
 use deployment::{Deployment, DeploymentError, RemoteClientNotConfigured};
 use executors::profile::ExecutorConfigs;
 use git::GitService;
+use openclaw_orchestrator::{OcHookService, OcOrchestrationHook};
 use relay_control::{RelayControl, signing::RelaySigningService};
 use server_info::ServerInfo;
 use services::services::{
@@ -33,7 +34,6 @@ use utils::{
 use uuid::Uuid;
 use workspace_manager::WorkspaceManager;
 use worktree_manager::WorktreeManager;
-use openclaw_orchestrator::{OcOrchestrationHook, OcHookService};
 
 use crate::{container::LocalContainerService, pty::PtyService};
 mod command;
@@ -190,8 +190,7 @@ impl Deployment for LocalDeployment {
             analytics_service: s.clone(),
         });
         let workspace_manager = WorkspaceManager::new(db.clone());
-        let oc_hook: Arc<dyn OcHookService> =
-            Arc::new(OcOrchestrationHook::new(db.clone()));
+        let oc_hook: Arc<dyn OcHookService> = Arc::new(OcOrchestrationHook::new(db.clone()));
         let container = LocalContainerService::new(
             db.clone(),
             workspace_manager.clone(),

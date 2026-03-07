@@ -67,6 +67,53 @@ impl OcQaRunner {
         Self { db }
     }
 
+    /// Test komutunu `workspace_dir` içinde çalıştırır, sonucu DB'ye kaydeder ve `QaOutcome` döner.
+    pub async fn run_qa_and_record(
+        &self,
+        workspace_id: Uuid,
+        execution_process_id: Uuid,
+        workspace_dir: &Path,
+    ) -> Result<QaOutcome, QaError> {
+        let qa_run = self
+            .start_qa(
+                StartQaRequest {
+                    workspace_id,
+                    execution_process_id,
+                    test_command: None,
+                    max_retries: None,
+                },
+                workspace_dir,
+            )
+            .await?;
+
+        tracing::info!(
+            workspace_id = %workspace_id,
+            test_command = %qa_run.test_command,
+            "Running test command"
+        );
+
+        let output = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(&qa_run.test_command)
+            .current_dir(workspace_dir)
+            .output()
+            .await
+            .map_err(|e| QaError::Other(anyhow!("Test command spawn failed: {e}")))?;
+
+        let exit_code = output.status.code().unwrap_or(-1);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined = format!("{stdout}{stderr}").trim().to_string();
+
+        tracing::info!(
+            workspace_id = %workspace_id,
+            exit_code,
+            "Test command finished"
+        );
+
+        self.record_result(qa_run.id, exit_code, combined).await
+    }
+
     /// Hata çıktısından agent için follow-up prompt üretir.
     fn build_follow_up_prompt(test_command: &str, output: &str, attempt: i64) -> String {
         format!(

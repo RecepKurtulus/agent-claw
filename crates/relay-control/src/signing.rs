@@ -8,7 +8,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use rand::rngs::OsRng;
+use rand::{RngCore, rngs::OsRng};
 use tokio::sync::{RwLock, RwLockMappedWriteGuard, RwLockWriteGuard};
 use uuid::Uuid;
 
@@ -69,7 +69,9 @@ impl RelaySigningService {
             })?;
             SigningKey::from_bytes(&arr)
         } else {
-            let key = SigningKey::generate(&mut OsRng);
+            let mut bytes = [0u8; 32];
+            rand::rngs::OsRng.fill_bytes(&mut bytes);
+            let key = SigningKey::from_bytes(&bytes);
 
             if let Some(parent) = key_path.parent() {
                 fs::create_dir_all(parent)?;
