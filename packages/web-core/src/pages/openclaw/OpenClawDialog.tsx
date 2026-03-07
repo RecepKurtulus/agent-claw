@@ -3,6 +3,8 @@ import {
   BrainIcon,
   SpinnerIcon,
   WarningCircleIcon,
+  ListBulletsIcon,
+  GraphIcon,
 } from '@phosphor-icons/react';
 import { create, useModal } from '@ebay/nice-modal-react';
 import {
@@ -18,6 +20,7 @@ import { defineModal } from '@/shared/lib/modals';
 import { useCreateOcPlan } from './hooks/useCreateOcPlan';
 import { DuplicationWarnings } from './components/DuplicationWarnings';
 import { PlanTaskList } from './components/PlanTaskList';
+import { DependencyGraph } from './components/DependencyGraph';
 import type { OcPlanTask, CreateOcPlanResponse } from './oc-types';
 
 // ── Dialog props ───────────────────────────────────────────────────────────
@@ -228,6 +231,8 @@ function ResultStep({
   draftTasks: OcPlanTask[];
   onTasksChange: (tasks: OcPlanTask[]) => void;
 }) {
+  const [view, setView] = useState<'list' | 'graph'>('list');
+
   return (
     <div className="space-y-4">
       {/* Codebase context badge */}
@@ -248,12 +253,48 @@ function ResultStep({
       {/* Duplication warnings */}
       <DuplicationWarnings warnings={result.duplication_warnings} />
 
-      {/* Task list */}
+      {/* View toggle + task list/graph */}
       <div className="space-y-2">
-        <h3 className="text-sm font-medium text-normal">
-          Oluşturulan Görevler
-        </h3>
-        <PlanTaskList tasks={draftTasks} onChange={onTasksChange} />
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-medium text-normal">
+            Oluşturulan Görevler
+          </h3>
+          <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5 border border-border">
+            <button
+              type="button"
+              onClick={() => setView('list')}
+              className={cn(
+                'flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors',
+                view === 'list'
+                  ? 'bg-panel text-normal shadow-sm'
+                  : 'text-low hover:text-normal'
+              )}
+            >
+              <ListBulletsIcon className="size-3" />
+              Liste
+            </button>
+            <button
+              type="button"
+              onClick={() => setView('graph')}
+              className={cn(
+                'flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors',
+                view === 'graph'
+                  ? 'bg-panel text-normal shadow-sm'
+                  : 'text-low hover:text-normal'
+              )}
+            >
+              <GraphIcon className="size-3" />
+              Graf
+            </button>
+          </div>
+        </div>
+
+        {view === 'list' && (
+          <PlanTaskList tasks={draftTasks} onChange={onTasksChange} />
+        )}
+        {view === 'graph' && (
+          <DependencyGraph tasks={draftTasks} onChange={onTasksChange} />
+        )}
       </div>
     </div>
   );
