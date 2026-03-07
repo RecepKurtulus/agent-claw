@@ -1361,8 +1361,53 @@ impl ContainerService for LocalContainerService {
     }
 
     async fn delete(&self, workspace: &Workspace) -> Result<(), ContainerError> {
+        // Workspace silinince OC task'ı failed yap
+        if let Err(e) = self.oc_hook.on_workspace_archived(workspace.id).await {
+            tracing::warn!(workspace_id = %workspace.id, "OC hook error on delete: {e}");
+        }
         self.try_stop(workspace, true).await;
         self.cleanup_workspace(workspace).await;
+        Ok(())
+    }
+
+    async fn archive_workspace(&self, workspace_id: Uuid) -> Result<(), ContainerError> {
+        // OC task'ı failed yap (workspace arşivlenince)
+        if let Err(e) = self.oc_hook.on_workspace_archived(workspace_id).await {
+            tracing::warn!(workspace_id = %workspace_id, "OC hook error on archive: {e}");
+        }
+
+        // Varsayılan archive mantığını çalıştır
+        use db::models::{execution_process::ExecutionProcess, workspace::Workspace as WsModel};
+
+        WsModel::set_archived(&self.db.pool, workspace_id, true).await?;
+
+        if let Ok(dev_servers) =
+            ExecutionProcess::find_running_dev_servers_by_workspace(&self.db.pool, workspace_id)
+                .await
+        {
+            for dev_server in dev_servers {
+                if let Err(e) = self
+                    .stop_execution(&dev_server, ExecutionProcessStatus::Killed)
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to stop dev server {} for workspace {}: {}",
+                        dev_server.id,
+                        workspace_id,
+                        e
+                    );
+                }
+            }
+        }
+
+        if let Err(e) = self.try_run_archive_script(workspace_id).await {
+            tracing::error!(
+                "Failed to run archive script for workspace {}: {}",
+                workspace_id,
+                e
+            );
+        }
+
         Ok(())
     }
 

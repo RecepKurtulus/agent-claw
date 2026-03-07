@@ -48,7 +48,7 @@ Sen → diff'i incele → onayla → merge
 - Bir sonraki task başlatılırken prompt'un başına eklensin:
   `"Önceki adımda şunlar yapıldı: [özet]. Şimdi senin görevin: [prompt]"`
 
-### 1.4 Workspace-Task Bağlantısı
+### 1.4 Workspace-Task Bağlantısı ✅
 - Workspace oluşturulunca `oc_task_run_state.workspace_id` set edilsin
 - Workspace silinince / arşivlenince task state güncellenmeli
 

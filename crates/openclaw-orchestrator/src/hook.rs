@@ -46,6 +46,9 @@ pub trait OcHookService: Send + Sync {
         workspace_dir: &Path,
         success: bool,
     ) -> Result<OcHookResult, HookError>;
+
+    /// Workspace arşivlenince veya silinince çağrılır; aktif OC task'ı failed yapar.
+    async fn on_workspace_archived(&self, workspace_id: Uuid) -> Result<(), HookError>;
 }
 
 pub struct OcOrchestrationHook {
@@ -189,6 +192,24 @@ impl OcHookService for OcOrchestrationHook {
             },
         }
     }
+
+    async fn on_workspace_archived(&self, workspace_id: Uuid) -> Result<(), HookError> {
+        // Aktif (running) task run kaydını bul
+        let Some((run_id, task_id)) = self.find_active_task_run(workspace_id).await? else {
+            return Ok(());
+        };
+
+        tracing::warn!(
+            workspace_id = %workspace_id,
+            run_id = %run_id,
+            task_id = %task_id,
+            "Workspace archived — marking OC task as failed"
+        );
+
+        let orchestrator = OcOrchestrator::new(self.db.clone());
+        orchestrator.on_task_failed(run_id, task_id).await?;
+        Ok(())
+    }
 }
 
 /// Prod dışı / OpenClaw devre dışıyken kullanılan no-op implementasyon.
@@ -204,5 +225,9 @@ impl OcHookService for NoopOcHook {
         _success: bool,
     ) -> Result<OcHookResult, HookError> {
         Ok(OcHookResult::NotManaged)
+    }
+
+    async fn on_workspace_archived(&self, _workspace_id: Uuid) -> Result<(), HookError> {
+        Ok(())
     }
 }

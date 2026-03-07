@@ -6,13 +6,10 @@ use axum::{
 };
 use deployment::Deployment;
 use openclaw_orchestrator::{
-    OcOrchestrator, OcTaskDependency, RunPlanRequest,
-    orchestrator::OrchestratorService,
+    OcOrchestrator, OcTaskDependency, RunPlanRequest, orchestrator::OrchestratorService,
 };
 use openclaw_planner::{
-    CreateOcPlanRequest, OcPlan, OcPlanTask,
-    planner::PlannerService,
-    OcPlanner,
+    CreateOcPlanRequest, OcPlan, OcPlanTask, OcPlanner, planner::PlannerService,
 };
 use serde::{Deserialize, Serialize};
 use utils::response::ApiResponse;
@@ -129,6 +126,44 @@ pub async fn list_dependencies(
     Ok(ResponseJson(ApiResponse::success(deps)))
 }
 
+#[derive(Deserialize)]
+pub struct StartTaskRequest {
+    pub workspace_id: Uuid,
+}
+
+/// Bir task için workspace'i bağlar; oc_task_run_state.workspace_id set edilir.
+pub async fn start_task(
+    State(deployment): State<DeploymentImpl>,
+    Path((run_id, task_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<StartTaskRequest>,
+) -> Result<ResponseJson<ApiResponse<()>>, ApiError> {
+    let orchestrator = OcOrchestrator::new(deployment.db().clone());
+    orchestrator
+        .on_task_started(run_id, task_id, req.workspace_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(ResponseJson(ApiResponse::success(())))
+}
+
+#[derive(Deserialize)]
+pub struct GetPromptRequest {
+    pub base_prompt: Option<String>,
+}
+
+/// Dependency özetlerini eklenmiş task prompt'unu döner.
+pub async fn get_task_prompt(
+    State(deployment): State<DeploymentImpl>,
+    Path((run_id, task_id)): Path<(Uuid, Uuid)>,
+    Json(req): Json<GetPromptRequest>,
+) -> Result<ResponseJson<ApiResponse<String>>, ApiError> {
+    let orchestrator = OcOrchestrator::new(deployment.db().clone());
+    let prompt = orchestrator
+        .get_prompt_for_task(run_id, task_id, req.base_prompt.as_deref())
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(ResponseJson(ApiResponse::success(prompt)))
+}
+
 // ── Router ─────────────────────────────────────────────────────────────────
 
 pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
@@ -140,8 +175,20 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         // Orchestration
         .route("/openclaw/plans/:plan_id/run", post(run_plan))
         .route("/openclaw/runs/:run_id", get(get_run))
+        // Task lifecycle
+        .route(
+            "/openclaw/runs/:run_id/tasks/:task_id/start",
+            post(start_task),
+        )
+        .route(
+            "/openclaw/runs/:run_id/tasks/:task_id/prompt",
+            post(get_task_prompt),
+        )
         // Dependency graph
-        .route("/openclaw/plans/:plan_id/dependencies", post(add_dependency))
+        .route(
+            "/openclaw/plans/:plan_id/dependencies",
+            post(add_dependency),
+        )
         .route(
             "/openclaw/plans/:plan_id/dependencies",
             get(list_dependencies),

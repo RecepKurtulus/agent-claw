@@ -59,6 +59,14 @@ pub trait OrchestratorService: Send + Sync {
     /// Bir task başarısız olduğunda çağrılır.
     async fn on_task_failed(&self, run_id: Uuid, task_id: Uuid) -> Result<(), OrchestratorError>;
 
+    /// Bir task için workspace oluşturulduğunda çağrılır; workspace_id'yi task state'e bağlar.
+    async fn on_task_started(
+        &self,
+        run_id: Uuid,
+        task_id: Uuid,
+        workspace_id: Uuid,
+    ) -> Result<(), OrchestratorError>;
+
     /// Tamamlanmış bağımlılıkların özetlerini başına ekleyerek task için tam prompt döner.
     /// `base_prompt` None ise oc_plan_tasks.prompt kullanılır.
     async fn get_prompt_for_task(
@@ -438,6 +446,36 @@ impl OrchestratorService for OcOrchestrator {
         .bind(run_id.to_string())
         .execute(&self.db.pool)
         .await?;
+
+        Ok(())
+    }
+
+    async fn on_task_started(
+        &self,
+        run_id: Uuid,
+        task_id: Uuid,
+        workspace_id: Uuid,
+    ) -> Result<(), OrchestratorError> {
+        let now = Utc::now();
+
+        sqlx::query(
+            "UPDATE oc_task_run_state
+             SET workspace_id = ?, status = 'running', started_at = ?
+             WHERE run_id = ? AND task_id = ?",
+        )
+        .bind(workspace_id.to_string())
+        .bind(now.to_rfc3339())
+        .bind(run_id.to_string())
+        .bind(task_id.to_string())
+        .execute(&self.db.pool)
+        .await?;
+
+        tracing::info!(
+            run_id = %run_id,
+            task_id = %task_id,
+            workspace_id = %workspace_id,
+            "OC task started — workspace bound"
+        );
 
         Ok(())
     }
