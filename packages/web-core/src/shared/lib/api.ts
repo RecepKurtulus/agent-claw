@@ -1547,6 +1547,7 @@ export const searchApi = {
 import type {
   CreateOcPlanRequest,
   CreateOcPlanResponse,
+  OcQaDetail,
   OcRunDetail,
   RunPlanRequest,
   RunPlanResponse,
@@ -1591,6 +1592,29 @@ export const openclawApi = {
       `/api/openclaw/runs/${runId}/tasks/${taskId}/retry`,
       { method: 'POST' }
     );
+    await handleApiResponse<unknown>(response);
+  },
+
+  getQaDetail: async (workspaceId: string): Promise<OcQaDetail | null> => {
+    const response = await makeRequest(
+      `/api/openclaw/qa/workspace/${workspaceId}`,
+      { method: 'GET' }
+    );
+    return handleApiResponse<OcQaDetail | null>(response);
+  },
+
+  forceRetryQa: async (qaRunId: string): Promise<void> => {
+    const response = await makeRequest(
+      `/api/openclaw/qa/${qaRunId}/force-retry`,
+      { method: 'POST' }
+    );
+    await handleApiResponse<unknown>(response);
+  },
+
+  resolveQa: async (qaRunId: string): Promise<void> => {
+    const response = await makeRequest(`/api/openclaw/qa/${qaRunId}/resolve`, {
+      method: 'POST',
+    });
     await handleApiResponse<unknown>(response);
   },
 };

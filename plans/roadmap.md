@@ -95,7 +95,7 @@ bağımlılıklı ticket listesi çıkar.
 
 ---
 
-## Faz 3 — Frontend UI
+## Faz 3 — Frontend UI ✅
 
 **Hedef:** Kullanıcı planı görsün, yönetsin, onaylasın.
 
@@ -116,7 +116,7 @@ bağımlılıklı ticket listesi çıkar.
 - QA retry sayısı ve son hata mesajı
 - "Durdur" / "Yeniden Başlat" butonları
 
-### 3.4 QA Sonuç Ekranı
+### 3.4 QA Sonuç Ekranı ✅
 - Test çıktısı syntax-highlighted
 - "Agent'a geri gönder" veya "Elle düzelt" seçimi
 - Max retry dolunca insan müdahale akışı

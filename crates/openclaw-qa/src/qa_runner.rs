@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     test_detector::TestDetector,
-    types::{OcQaResult, OcQaRun, OcQaRunStatus, StartQaRequest},
+    types::{OcQaDetail, OcQaResult, OcQaRun, OcQaRunStatus, StartQaRequest},
 };
 
 #[derive(Debug, Error)]
@@ -42,6 +42,18 @@ pub trait QaRunnerService: Send + Sync {
 
     /// Workspace'e ait son QA run'ı getirir.
     async fn latest_qa_run(&self, workspace_id: Uuid) -> Result<Option<OcQaRun>, QaError>;
+
+    /// Workspace için tam QA detayını (run + tüm sonuçlar) döner.
+    async fn get_qa_detail_for_workspace(
+        &self,
+        workspace_id: Uuid,
+    ) -> Result<Option<OcQaDetail>, QaError>;
+
+    /// Başarısız/tükenmiş QA run'ını sıfırlayarak tekrar denenebilir hale getirir.
+    async fn force_retry_qa(&self, qa_run_id: Uuid) -> Result<(), QaError>;
+
+    /// QA run'ını geçmiş olarak işaretler (insan onayı — "Elle Düzelt").
+    async fn resolve_qa(&self, qa_run_id: Uuid) -> Result<(), QaError>;
 }
 
 /// Test sonucunun çağırana bildirilen özeti
@@ -292,6 +304,74 @@ impl QaRunnerService for OcQaRunner {
 
         let Some(row) = row else { return Ok(None) };
         Ok(Some(Self::row_to_qa_run(row)?))
+    }
+
+    async fn get_qa_detail_for_workspace(
+        &self,
+        workspace_id: Uuid,
+    ) -> Result<Option<OcQaDetail>, QaError> {
+        let Some(run) = self.latest_qa_run(workspace_id).await? else {
+            return Ok(None);
+        };
+
+        let result_rows = sqlx::query(
+            "SELECT id, qa_run_id, attempt_number, exit_code, output, passed, created_at
+             FROM oc_qa_results WHERE qa_run_id = ? ORDER BY attempt_number ASC",
+        )
+        .bind(run.id.to_string())
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        let results: Vec<OcQaResult> = result_rows
+            .into_iter()
+            .map(|row| {
+                let id: String = row.try_get("id")?;
+                let qa_run_id: String = row.try_get("qa_run_id")?;
+                let created_at_str: String = row.try_get("created_at")?;
+                let passed_int: i64 = row.try_get("passed").unwrap_or(0);
+                Ok(OcQaResult {
+                    id: id.parse().map_err(|_| sqlx::Error::RowNotFound)?,
+                    qa_run_id: qa_run_id.parse().map_err(|_| sqlx::Error::RowNotFound)?,
+                    attempt_number: row.try_get("attempt_number")?,
+                    exit_code: row.try_get("exit_code")?,
+                    output: row.try_get("output").unwrap_or_default(),
+                    passed: passed_int != 0,
+                    created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                })
+            })
+            .collect::<Result<_, sqlx::Error>>()?;
+
+        let follow_up_prompt = results
+            .last()
+            .filter(|r| !r.passed)
+            .map(|r| Self::build_follow_up_prompt(&run.test_command, &r.output, r.attempt_number));
+
+        Ok(Some(OcQaDetail {
+            run,
+            results,
+            follow_up_prompt,
+        }))
+    }
+
+    async fn force_retry_qa(&self, qa_run_id: Uuid) -> Result<(), QaError> {
+        sqlx::query(
+            "UPDATE oc_qa_runs SET status = 'failed', retry_count = 0, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(Utc::now().to_rfc3339())
+        .bind(qa_run_id.to_string())
+        .execute(&self.db.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn resolve_qa(&self, qa_run_id: Uuid) -> Result<(), QaError> {
+        sqlx::query("UPDATE oc_qa_runs SET status = 'passed', updated_at = ? WHERE id = ?")
+            .bind(Utc::now().to_rfc3339())
+            .bind(qa_run_id.to_string())
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
     }
 }
 

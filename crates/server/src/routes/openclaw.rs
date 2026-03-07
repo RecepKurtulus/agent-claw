@@ -12,6 +12,7 @@ use openclaw_orchestrator::{
 use openclaw_planner::{
     CreateOcPlanRequest, OcPlan, OcPlanTask, OcPlanner, planner::PlannerService,
 };
+use openclaw_qa::{OcQaDetail, OcQaRunner, qa_runner::QaRunnerService};
 use serde::{Deserialize, Serialize};
 use utils::response::ApiResponse;
 use uuid::Uuid;
@@ -203,6 +204,46 @@ pub async fn get_task_prompt(
 
 // ── Router ─────────────────────────────────────────────────────────────────
 
+// ── QA handlers ────────────────────────────────────────────────────────────
+
+pub async fn get_qa_detail(
+    State(deployment): State<DeploymentImpl>,
+    Path(workspace_id): Path<Uuid>,
+) -> Result<ResponseJson<ApiResponse<Option<OcQaDetail>>>, ApiError> {
+    let runner = OcQaRunner::new(deployment.db().clone());
+    let detail = runner
+        .get_qa_detail_for_workspace(workspace_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(ResponseJson(ApiResponse::success(detail)))
+}
+
+pub async fn force_retry_qa(
+    State(deployment): State<DeploymentImpl>,
+    Path(qa_run_id): Path<Uuid>,
+) -> Result<ResponseJson<ApiResponse<()>>, ApiError> {
+    let runner = OcQaRunner::new(deployment.db().clone());
+    runner
+        .force_retry_qa(qa_run_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(ResponseJson(ApiResponse::success(())))
+}
+
+pub async fn resolve_qa(
+    State(deployment): State<DeploymentImpl>,
+    Path(qa_run_id): Path<Uuid>,
+) -> Result<ResponseJson<ApiResponse<()>>, ApiError> {
+    let runner = OcQaRunner::new(deployment.db().clone());
+    runner
+        .resolve_qa(qa_run_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(ResponseJson(ApiResponse::success(())))
+}
+
+// ── Router ─────────────────────────────────────────────────────────────────
+
 pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     Router::new()
         // Plan CRUD
@@ -227,6 +268,10 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             "/openclaw/runs/{run_id}/tasks/{task_id}/prompt",
             post(get_task_prompt),
         )
+        // QA detail + actions
+        .route("/openclaw/qa/workspace/{workspace_id}", get(get_qa_detail))
+        .route("/openclaw/qa/{qa_run_id}/force-retry", post(force_retry_qa))
+        .route("/openclaw/qa/{qa_run_id}/resolve", post(resolve_qa))
         // Dependency graph
         .route(
             "/openclaw/plans/{plan_id}/dependencies",

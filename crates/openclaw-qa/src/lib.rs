@@ -3,4 +3,4 @@ pub mod test_detector;
 pub mod types;
 
 pub use qa_runner::{OcQaRunner, QaError, QaOutcome, QaRunnerService};
-pub use types::{OcQaResult, OcQaRun, OcQaRunStatus, StartQaRequest};
+pub use types::{OcQaDetail, OcQaResult, OcQaRun, OcQaRunStatus, StartQaRequest};

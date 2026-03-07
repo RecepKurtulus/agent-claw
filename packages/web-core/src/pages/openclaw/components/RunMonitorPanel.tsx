@@ -8,9 +8,11 @@ import {
   ArrowCounterClockwiseIcon,
   StopCircleIcon,
   WarningCircleIcon,
+  MagnifyingGlassIcon,
 } from '@phosphor-icons/react';
 import { cn } from '@/shared/lib/utils';
 import { openclawApi } from '@/shared/lib/api';
+import { QaResultModal } from './QaResultModal';
 import type {
   OcRunDetail,
   OcRunTaskDetail,
@@ -70,14 +72,17 @@ function StatusBadge({ status }: { status: OcTaskRunStatus }) {
 function TaskRow({
   task,
   onRetry,
+  onViewQa,
 }: {
   task: OcRunTaskDetail;
   runId: string;
   onRetry: (taskId: string) => void;
+  onViewQa: (workspaceId: string, taskTitle: string) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
   const hasQaError = !!task.qa_last_error;
   const hasQa = task.qa_retry_count > 0 || !!task.qa_status;
+  const isQaExhausted = task.qa_status === 'exhausted';
 
   return (
     <div
@@ -124,6 +129,19 @@ function TaskRow({
 
           <StatusBadge status={task.status} />
 
+          {/* "View QA" button when exhausted */}
+          {isQaExhausted && task.workspace_id && (
+            <button
+              type="button"
+              onClick={() => onViewQa(task.workspace_id!, task.task_title)}
+              title="QA sonuçlarını incele"
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium text-amber-500 hover:bg-amber-500/10 transition-colors border border-amber-500/30"
+            >
+              <MagnifyingGlassIcon className="size-3.5" />
+              İncele
+            </button>
+          )}
+
           {/* Retry button */}
           {task.status === 'failed' && (
             <button
@@ -136,8 +154,8 @@ function TaskRow({
             </button>
           )}
 
-          {/* Expand QA error */}
-          {hasQaError && (
+          {/* Expand quick QA error preview */}
+          {hasQaError && !isQaExhausted && (
             <button
               type="button"
               onClick={() => setExpanded((e) => !e)}
@@ -263,6 +281,10 @@ interface RunMonitorPanelProps {
 export function RunMonitorPanel({ runId }: RunMonitorPanelProps) {
   const [detail, setDetail] = useState<OcRunDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [qaModal, setQaModal] = useState<{
+    workspaceId: string;
+    taskTitle: string;
+  } | null>(null);
 
   const fetchDetail = useCallback(async () => {
     try {
@@ -317,6 +339,10 @@ export function RunMonitorPanel({ runId }: RunMonitorPanelProps) {
     [runId, fetchDetail]
   );
 
+  const handleViewQa = useCallback((workspaceId: string, taskTitle: string) => {
+    setQaModal({ workspaceId, taskTitle });
+  }, []);
+
   if (error) {
     return (
       <div className="flex items-center gap-2 text-destructive text-sm py-4">
@@ -336,19 +362,31 @@ export function RunMonitorPanel({ runId }: RunMonitorPanelProps) {
   }
 
   return (
-    <div className="space-y-4">
-      <RunStatusHeader detail={detail} onCancel={handleCancel} />
+    <>
+      <div className="space-y-4">
+        <RunStatusHeader detail={detail} onCancel={handleCancel} />
 
-      <div className="space-y-2">
-        {detail.tasks.map((task) => (
-          <TaskRow
-            key={task.task_id}
-            task={task}
-            runId={runId}
-            onRetry={handleRetry}
-          />
-        ))}
+        <div className="space-y-2">
+          {detail.tasks.map((task) => (
+            <TaskRow
+              key={task.task_id}
+              task={task}
+              runId={runId}
+              onRetry={handleRetry}
+              onViewQa={handleViewQa}
+            />
+          ))}
+        </div>
       </div>
-    </div>
+
+      {qaModal && (
+        <QaResultModal
+          workspaceId={qaModal.workspaceId}
+          taskTitle={qaModal.taskTitle}
+          onClose={() => setQaModal(null)}
+          onAction={fetchDetail}
+        />
+      )}
+    </>
   );
 }

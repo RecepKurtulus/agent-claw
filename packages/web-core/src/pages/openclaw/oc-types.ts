@@ -49,6 +49,41 @@ export type OcCodebaseContext = {
   summary: string;
 };
 
+export type OcQaRunStatus =
+  | 'pending'
+  | 'running'
+  | 'passed'
+  | 'failed'
+  | 'exhausted';
+
+export type OcQaRun = {
+  id: string;
+  workspace_id: string;
+  execution_process_id: string;
+  test_command: string;
+  status: OcQaRunStatus;
+  retry_count: number;
+  max_retries: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type OcQaResult = {
+  id: string;
+  qa_run_id: string;
+  attempt_number: number;
+  exit_code?: number;
+  output: string;
+  passed: boolean;
+  created_at: string;
+};
+
+export type OcQaDetail = {
+  run: OcQaRun;
+  results: OcQaResult[];
+  follow_up_prompt?: string;
+};
+
 export type OcTaskRunStatus =
   | 'pending'
   | 'blocked'

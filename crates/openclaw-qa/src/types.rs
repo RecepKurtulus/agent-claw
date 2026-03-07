@@ -76,3 +76,13 @@ pub struct StartQaRequest {
     pub test_command: Option<String>,
     pub max_retries: Option<i64>,
 }
+
+/// QA panel için tam detay (run + tüm denemeler)
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OcQaDetail {
+    pub run: OcQaRun,
+    pub results: Vec<OcQaResult>,
+    /// Agent'a gönderilecek follow-up prompt metni (son hatadan üretilir)
+    pub follow_up_prompt: Option<String>,
+}
