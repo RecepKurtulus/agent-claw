@@ -67,7 +67,7 @@ otomatik unblock + QA döngüsü başlar.
 - Mevcut issue'lar çekilir (duplikasyon engeli)
 - Özet bağlam metni oluşturulur
 
-### 2.2 LLM'e Structured Prompt
+### 2.2 LLM'e Structured Prompt ✅
 - Mevcut executor (Claude Code, Codex vb.) seçilir
 - Prompt şablonu:
   ```
@@ -81,7 +81,7 @@ otomatik unblock + QA döngüsü başlar.
   ```
 - Executor'dan JSON çıktısı parse edilir
 
-### 2.3 Otomatik Dependency Tespiti
+### 2.3 Otomatik Dependency Tespiti ✅
 - LLM'den gelen `depends_on` alanları DAG'a eklenir
 - Döngüsel bağımlılık kontrolü yapılır
 - Tahminlenen sıra DB'ye yazılır

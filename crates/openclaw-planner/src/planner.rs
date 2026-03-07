@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     context::CodebaseScanner,
+    dependency::PlanDependencyResolver,
     llm::AnthropicLlmPlanner,
     types::{
         CreateOcPlanRequest, CreateOcPlanResponse, OcCodebaseContext, OcPlan, OcPlanStatus,
@@ -226,6 +227,54 @@ impl PlannerService for OcPlanner {
                 created_at: now,
             });
         }
+
+        // ── Bağımlılık çözümleme ve topolojik sıralama ────────────────────────
+        match PlanDependencyResolver::resolve(&tasks) {
+            Ok(resolved) => {
+                // order_index'i topological sıralamaya göre güncelle
+                for (new_index, &task_id) in resolved.ordered_task_ids.iter().enumerate() {
+                    sqlx::query("UPDATE oc_plan_tasks SET order_index = ? WHERE id = ?")
+                        .bind(new_index as i64)
+                        .bind(task_id.to_string())
+                        .execute(&self.db.pool)
+                        .await?;
+
+                    // tasks vektöründeki order_index'i de güncelle
+                    if let Some(t) = tasks.iter_mut().find(|t| t.id == task_id) {
+                        t.order_index = new_index as i64;
+                    }
+                }
+
+                // Bağımlılık kenarlarını oc_task_dependencies'e yaz
+                for (task_id, dep_id) in &resolved.edges {
+                    let edge_id = Uuid::new_v4();
+                    sqlx::query(
+                        "INSERT OR IGNORE INTO oc_task_dependencies
+                         (id, plan_id, task_id, depends_on_task_id, created_at)
+                         VALUES (?, ?, ?, ?, ?)",
+                    )
+                    .bind(edge_id.to_string())
+                    .bind(plan_id.to_string())
+                    .bind(task_id.to_string())
+                    .bind(dep_id.to_string())
+                    .bind(now.to_rfc3339())
+                    .execute(&self.db.pool)
+                    .await?;
+                }
+
+                tracing::info!(
+                    tasks = tasks.len(),
+                    edges = resolved.edges.len(),
+                    "Dependency graph resolved and persisted"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Bağımlılık grafiği çözümlenemedi, sıralama değişmedi");
+            }
+        }
+
+        // tasks vektörünü order_index'e göre sırala
+        tasks.sort_by_key(|t| t.order_index);
 
         // Status'u ready'e geçir
         sqlx::query("UPDATE oc_plans SET status = ?, updated_at = ? WHERE id = ?")
