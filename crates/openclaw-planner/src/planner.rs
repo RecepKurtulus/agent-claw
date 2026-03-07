@@ -8,11 +8,12 @@ use uuid::Uuid;
 
 use crate::{
     context::CodebaseScanner,
+    dedup::{DuplicationChecker, ExistingTask},
     dependency::PlanDependencyResolver,
     llm::AnthropicLlmPlanner,
     types::{
-        CreateOcPlanRequest, CreateOcPlanResponse, OcCodebaseContext, OcPlan, OcPlanStatus,
-        OcPlanTask, OcTaskComplexity,
+        CreateOcPlanRequest, CreateOcPlanResponse, OcCodebaseContext, OcDuplicationWarning, OcPlan,
+        OcPlanStatus, OcPlanTask, OcTaskComplexity,
     },
 };
 
@@ -284,6 +285,42 @@ impl PlannerService for OcPlanner {
             .execute(&self.db.pool)
             .await?;
 
+        // ── Duplikasyon kontrolü ───────────────────────────────────────────────
+        let duplication_warnings: Vec<OcDuplicationWarning> = {
+            // Açık Kanban task'larını çek (cancelled + done hariç)
+            let existing_rows = sqlx::query(
+                "SELECT title, status FROM tasks
+                 WHERE project_id = ? AND status NOT IN ('cancelled', 'done')
+                 ORDER BY created_at DESC LIMIT 50",
+            )
+            .bind(req.project_id.to_string())
+            .fetch_all(&self.db.pool)
+            .await
+            .unwrap_or_default();
+
+            let existing: Vec<ExistingTask> = existing_rows
+                .into_iter()
+                .filter_map(|row| {
+                    let title: String = row.try_get("title").ok()?;
+                    let status: String = row.try_get("status").ok()?;
+                    Some(ExistingTask { title, status })
+                })
+                .collect();
+
+            if existing.is_empty() {
+                vec![]
+            } else {
+                let warnings = DuplicationChecker::check(&tasks, &existing, 0.30);
+                if !warnings.is_empty() {
+                    tracing::warn!(
+                        count = warnings.len(),
+                        "Duplikasyon uyarısı: yeni task'lar mevcut issue'larla örtüşüyor"
+                    );
+                }
+                warnings
+            }
+        };
+
         let plan = OcPlan {
             id: plan_id,
             project_id: req.project_id,
@@ -298,6 +335,7 @@ impl PlannerService for OcPlanner {
             plan,
             tasks,
             codebase_context: ctx_opt,
+            duplication_warnings,
         })
     }
 

@@ -57,7 +57,7 @@ otomatik unblock + QA döngüsü başlar.
 
 ---
 
-## Faz 2 — Akıllı Planlayıcı (LLM Entegrasyonu) 
+## Faz 2 — Akıllı Planlayıcı (LLM Entegrasyonu) ✅
 
 **Hedef:** "Şunu yap" dersen OpenClaw kodu okur, ne yapılacağını kendisi anlar.
 
@@ -86,7 +86,7 @@ otomatik unblock + QA döngüsü başlar.
 - Döngüsel bağımlılık kontrolü yapılır
 - Tahminlenen sıra DB'ye yazılır
 
-### 2.4 Duplikasyon ve Çatışma Kontrolü
+### 2.4 Duplikasyon ve Çatışma Kontrolü ✅
 - Aynı proje'nin açık issue'larıyla semantic benzerlik karşılaştırması
 - Benzer iş varsa kullanıcıya uyarı gösterilir
 

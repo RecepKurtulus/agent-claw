@@ -128,6 +128,20 @@ pub struct OcCodebaseContext {
     pub summary: String,
 }
 
+/// Duplikasyon uyarısı — yeni task ile var olan issue arasındaki benzerlik.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OcDuplicationWarning {
+    /// Yeni oluşturulmak istenen task başlığı.
+    pub new_task_title: String,
+    /// Benzer bulduğu mevcut task başlığı.
+    pub similar_task_title: String,
+    /// 0.0–1.0 arası benzerlik skoru.
+    pub similarity_score: f32,
+    /// Mevcut task'ın durumu (todo, inprogress, …).
+    pub existing_status: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct CreateOcPlanResponse {
@@ -137,4 +151,7 @@ pub struct CreateOcPlanResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub codebase_context: Option<OcCodebaseContext>,
+    /// Duplikasyon uyarıları (benzer issue'lar mevcut ise dolu gelir).
+    #[serde(default)]
+    pub duplication_warnings: Vec<OcDuplicationWarning>,
 }
