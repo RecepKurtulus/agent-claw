@@ -1,7 +1,12 @@
+pub mod context;
 pub mod planner;
 pub mod types;
 
-pub use planner::OcPlanner;
+pub use context::{
+    CodebaseContext, CodebaseScanner, ExistingTaskSummary, KeyFileInfo, ProjectType,
+};
+pub use planner::{OcPlanner, PlannerError, PlannerService};
 pub use types::{
-    CreateOcPlanRequest, CreateOcPlanResponse, OcPlan, OcPlanStatus, OcPlanTask, OcTaskComplexity,
+    CreateOcPlanRequest, CreateOcPlanResponse, OcCodebaseContext, OcPlan, OcPlanStatus, OcPlanTask,
+    OcTaskComplexity,
 };

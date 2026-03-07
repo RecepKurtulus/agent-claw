@@ -6,8 +6,12 @@ use sqlx::Row;
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::types::{
-    CreateOcPlanRequest, CreateOcPlanResponse, OcPlan, OcPlanStatus, OcPlanTask, OcTaskComplexity,
+use crate::{
+    context::CodebaseScanner,
+    types::{
+        CreateOcPlanRequest, CreateOcPlanResponse, OcCodebaseContext, OcPlan, OcPlanStatus,
+        OcPlanTask, OcTaskComplexity,
+    },
 };
 
 #[derive(Debug, Error)]
@@ -86,15 +90,43 @@ impl PlannerService for OcPlanner {
         let plan_id = Uuid::new_v4();
         let now = Utc::now();
 
-        // Plan kaydını oluştur
+        // Codebase taraması yap (repo_paths verilmişse)
+        let (ctx_opt, ctx_summary_opt): (Option<OcCodebaseContext>, Option<String>) =
+            if let Some(ref paths) = req.repo_paths {
+                if !paths.is_empty() {
+                    let scanner = CodebaseScanner::new(self.db.clone());
+                    let ctx = scanner.scan(req.project_id, paths).await;
+                    let summary = ctx.summary.clone();
+                    let brief = OcCodebaseContext {
+                        project_type: ctx.project_type.label(),
+                        key_file_count: ctx.key_files.len(),
+                        existing_task_count: ctx.existing_tasks.len(),
+                        summary: summary.clone(),
+                    };
+                    tracing::info!(
+                        project_type = %ctx.project_type.label(),
+                        key_files = ctx.key_files.len(),
+                        existing_tasks = ctx.existing_tasks.len(),
+                        "Codebase context collected"
+                    );
+                    (Some(brief), Some(summary))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
+        // Plan kaydını oluştur (context dahil)
         sqlx::query(
-            "INSERT INTO oc_plans (id, project_id, prompt, status, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO oc_plans (id, project_id, prompt, status, codebase_context, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(plan_id.to_string())
         .bind(req.project_id.to_string())
         .bind(&req.prompt)
         .bind(OcPlanStatus::Analyzing.as_str())
+        .bind(&ctx_summary_opt)
         .bind(now.to_rfc3339())
         .bind(now.to_rfc3339())
         .execute(&self.db.pool)
@@ -145,16 +177,21 @@ impl PlannerService for OcPlanner {
             project_id: req.project_id,
             prompt: req.prompt,
             status: OcPlanStatus::Ready,
+            codebase_context: ctx_summary_opt,
             created_at: now,
             updated_at: Utc::now(),
         };
 
-        Ok(CreateOcPlanResponse { plan, tasks })
+        Ok(CreateOcPlanResponse {
+            plan,
+            tasks,
+            codebase_context: ctx_opt,
+        })
     }
 
     async fn get_plan(&self, plan_id: Uuid) -> Result<Option<OcPlan>, PlannerError> {
         let row = sqlx::query(
-            "SELECT id, project_id, prompt, status, created_at, updated_at FROM oc_plans WHERE id = ?",
+            "SELECT id, project_id, prompt, status, codebase_context, created_at, updated_at FROM oc_plans WHERE id = ?",
         )
         .bind(plan_id.to_string())
         .fetch_optional(&self.db.pool)
@@ -167,6 +204,7 @@ impl PlannerService for OcPlanner {
         let status_str: String = row.try_get("status")?;
         let created_at_str: String = row.try_get("created_at")?;
         let updated_at_str: String = row.try_get("updated_at")?;
+        let codebase_context: Option<String> = row.try_get("codebase_context").ok().flatten();
 
         Ok(Some(OcPlan {
             id: id
@@ -177,6 +215,7 @@ impl PlannerService for OcPlanner {
                 .map_err(|e| PlannerError::Other(anyhow!("{}", e)))?,
             prompt: row.try_get("prompt")?,
             status: OcPlanStatus::try_from(status_str.as_str()).map_err(PlannerError::Other)?,
+            codebase_context,
             created_at: created_at_str
                 .parse()
                 .map_err(|e| PlannerError::Other(anyhow!("{}", e)))?,
@@ -220,7 +259,7 @@ impl PlannerService for OcPlanner {
 
     async fn list_plans(&self, project_id: Uuid) -> Result<Vec<OcPlan>, PlannerError> {
         let rows = sqlx::query(
-            "SELECT id, project_id, prompt, status, created_at, updated_at
+            "SELECT id, project_id, prompt, status, codebase_context, created_at, updated_at
              FROM oc_plans WHERE project_id = ? ORDER BY created_at DESC",
         )
         .bind(project_id.to_string())
@@ -234,6 +273,8 @@ impl PlannerService for OcPlanner {
                 let status_str: String = row.try_get("status")?;
                 let created_at_str: String = row.try_get("created_at")?;
                 let updated_at_str: String = row.try_get("updated_at")?;
+                let codebase_context: Option<String> =
+                    row.try_get("codebase_context").ok().flatten();
 
                 Ok(OcPlan {
                     id: id.parse().map_err(|_| sqlx::Error::RowNotFound)?,
@@ -241,6 +282,7 @@ impl PlannerService for OcPlanner {
                     prompt: row.try_get("prompt")?,
                     status: OcPlanStatus::try_from(status_str.as_str())
                         .unwrap_or(OcPlanStatus::Pending),
+                    codebase_context,
                     created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
                     updated_at: updated_at_str.parse().unwrap_or_else(|_| Utc::now()),
                 })

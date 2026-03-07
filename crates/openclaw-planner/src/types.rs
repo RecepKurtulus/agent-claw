@@ -10,6 +10,10 @@ pub struct OcPlan {
     pub project_id: Uuid,
     pub prompt: String,
     pub status: OcPlanStatus,
+    /// Codebase taramasından üretilen bağlam özeti (LLM'e verilir).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub codebase_context: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -101,6 +105,21 @@ impl TryFrom<&str> for OcTaskComplexity {
 pub struct CreateOcPlanRequest {
     pub project_id: Uuid,
     pub prompt: String,
+    /// Codebase taraması için repo dizin yolları (opsiyonel).
+    /// Verilirse planner otomatik proje tipini tespit eder ve bağlam toplar.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub repo_paths: Option<Vec<String>>,
+}
+
+/// Phase 2.1 taramasından dönen özet (response'a eklenir).
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OcCodebaseContext {
+    pub project_type: String,
+    pub key_file_count: usize,
+    pub existing_task_count: usize,
+    pub summary: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -108,4 +127,8 @@ pub struct CreateOcPlanRequest {
 pub struct CreateOcPlanResponse {
     pub plan: OcPlan,
     pub tasks: Vec<OcPlanTask>,
+    /// Codebase taraması yapıldıysa özet bilgisi.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub codebase_context: Option<OcCodebaseContext>,
 }

@@ -27,7 +27,7 @@ Sen → diff'i incele → onayla → merge
 
 ---
 
-## Faz 1 — Event Wiring (Sistemi Canlı Hale Getir)
+## Faz 1 — Event Wiring (Sistemi Canlı Hale Getir) ✅
 
 **Hedef:** Orchestrator gerçek zamanlı çalışsın. Agent bitince zincirleme tepkiler otomatik tetiklensin.
 
@@ -57,11 +57,11 @@ otomatik unblock + QA döngüsü başlar.
 
 ---
 
-## Faz 2 — Akıllı Planlayıcı (LLM Entegrasyonu)
+## Faz 2 — Akıllı Planlayıcı (LLM Entegrasyonu) 
 
 **Hedef:** "Şunu yap" dersen OpenClaw kodu okur, ne yapılacağını kendisi anlar.
 
-### 2.1 Codebase Bağlamı Toplama
+### 2.1 Codebase Bağlamı Toplama ✅
 - `FileSearchService` ile repo'daki anahtar dosyalar taranır
 - Proje tipi tespit edilir (Rust/TS/Python/...)
 - Mevcut issue'lar çekilir (duplikasyon engeli)
