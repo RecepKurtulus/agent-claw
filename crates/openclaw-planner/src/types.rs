@@ -65,7 +65,13 @@ pub struct OcPlanTask {
     pub issue_id: Option<Uuid>,
     pub title: String,
     pub description: String,
+    /// LLM'in ürettiği detaylı agent prompt'u.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub prompt: Option<String>,
     pub estimated_complexity: OcTaskComplexity,
+    /// Bu task'tan önce tamamlanması gereken task başlıkları.
+    pub depends_on: Vec<String>,
     pub order_index: i64,
     pub created_at: DateTime<Utc>,
 }

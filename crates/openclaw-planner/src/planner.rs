@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::{
     context::CodebaseScanner,
+    llm::AnthropicLlmPlanner,
     types::{
         CreateOcPlanRequest, CreateOcPlanResponse, OcCodebaseContext, OcPlan, OcPlanStatus,
         OcPlanTask, OcTaskComplexity,
@@ -51,21 +52,26 @@ pub struct OcPlanner {
     db: DBService,
 }
 
+/// Dahili görev adayı — hem LLM hem fallback çıktısı bu tipe dönüştürülür.
+struct TaskCandidate {
+    title: String,
+    description: String,
+    complexity: OcTaskComplexity,
+    prompt: Option<String>,
+    depends_on: Vec<String>,
+}
+
 impl OcPlanner {
     pub fn new(db: DBService) -> Self {
         Self { db }
     }
 
-    /// Prompt'tan yapılandırılmış task listesi üretir.
-    /// Şu an kural tabanlı parsing yapar; ileride LLM executor entegre edilebilir.
-    fn parse_tasks_from_prompt(prompt: &str) -> Vec<(String, String, OcTaskComplexity)> {
-        // Her satır bir görev olarak kabul et (basit başlangıç implementasyonu).
-        // LLM entegrasyonu sonradan buraya eklenecek.
+    /// Fallback: her satır → bir görev.
+    fn parse_tasks_fallback(prompt: &str) -> Vec<TaskCandidate> {
         prompt
             .lines()
             .filter(|l| !l.trim().is_empty())
-            .enumerate()
-            .map(|(_, line)| {
+            .map(|line| {
                 let title = line.trim().to_string();
                 let description = format!("Implement: {}", title);
                 let complexity = if title.len() > 80 {
@@ -75,8 +81,50 @@ impl OcPlanner {
                 } else {
                     OcTaskComplexity::Low
                 };
-                (title, description, complexity)
+                TaskCandidate {
+                    title,
+                    description,
+                    complexity,
+                    prompt: None,
+                    depends_on: vec![],
+                }
             })
+            .collect()
+    }
+
+    /// LLM yanıtından TaskCandidate listesi üretir.
+    async fn tasks_from_llm(
+        user_prompt: &str,
+        codebase_context: Option<&str>,
+    ) -> Option<Vec<TaskCandidate>> {
+        let llm = AnthropicLlmPlanner::from_env()?;
+        match llm.generate_tasks(user_prompt, codebase_context).await {
+            Ok(llm_tasks) => {
+                let candidates = llm_tasks
+                    .into_iter()
+                    .map(|t| TaskCandidate {
+                        complexity: t.to_complexity(),
+                        title: t.title,
+                        description: t.description,
+                        prompt: t.prompt,
+                        depends_on: t.depends_on,
+                    })
+                    .collect();
+                Some(candidates)
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "LLM planning failed, falling back to line parsing");
+                None
+            }
+        }
+    }
+
+    /// Eski test uyumluluğu için korunan yardımcı.
+    #[cfg(test)]
+    fn parse_tasks_from_prompt(prompt: &str) -> Vec<(String, String, OcTaskComplexity)> {
+        Self::parse_tasks_fallback(prompt)
+            .into_iter()
+            .map(|c| (c.title, c.description, c.complexity))
             .collect()
     }
 }
@@ -132,21 +180,34 @@ impl PlannerService for OcPlanner {
         .execute(&self.db.pool)
         .await?;
 
-        // Prompt'tan task'ları üret
-        let raw_tasks = Self::parse_tasks_from_prompt(&req.prompt);
+        // Task'ları üret: LLM varsa LLM, yoksa fallback
+        let candidates: Vec<TaskCandidate> = {
+            let llm_result = Self::tasks_from_llm(&req.prompt, ctx_summary_opt.as_deref()).await;
+            llm_result.unwrap_or_else(|| {
+                tracing::info!("Using fallback line-based task parser");
+                Self::parse_tasks_fallback(&req.prompt)
+            })
+        };
+
         let mut tasks = Vec::new();
 
-        for (index, (title, description, complexity)) in raw_tasks.into_iter().enumerate() {
+        for (index, candidate) in candidates.into_iter().enumerate() {
             let task_id = Uuid::new_v4();
+            let depends_on_json =
+                serde_json::to_string(&candidate.depends_on).unwrap_or_else(|_| "[]".to_string());
+
             sqlx::query(
-                "INSERT INTO oc_plan_tasks (id, plan_id, title, description, estimated_complexity, order_index, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO oc_plan_tasks
+                 (id, plan_id, title, description, estimated_complexity, prompt, depends_on_titles, order_index, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             )
             .bind(task_id.to_string())
             .bind(plan_id.to_string())
-            .bind(&title)
-            .bind(&description)
-            .bind(complexity.as_str())
+            .bind(&candidate.title)
+            .bind(&candidate.description)
+            .bind(candidate.complexity.as_str())
+            .bind(&candidate.prompt)
+            .bind(&depends_on_json)
             .bind(index as i64)
             .bind(now.to_rfc3339())
             .execute(&self.db.pool)
@@ -156,9 +217,11 @@ impl PlannerService for OcPlanner {
                 id: task_id,
                 plan_id,
                 issue_id: None,
-                title,
-                description,
-                estimated_complexity: complexity,
+                title: candidate.title,
+                description: candidate.description,
+                prompt: candidate.prompt,
+                estimated_complexity: candidate.complexity,
+                depends_on: candidate.depends_on,
                 order_index: index as i64,
                 created_at: now,
             });
@@ -227,7 +290,8 @@ impl PlannerService for OcPlanner {
 
     async fn get_plan_tasks(&self, plan_id: Uuid) -> Result<Vec<OcPlanTask>, PlannerError> {
         let rows = sqlx::query(
-            "SELECT id, plan_id, issue_id, title, description, estimated_complexity, order_index, created_at
+            "SELECT id, plan_id, issue_id, title, description, estimated_complexity,
+                    prompt, depends_on_titles, order_index, created_at
              FROM oc_plan_tasks WHERE plan_id = ? ORDER BY order_index ASC",
         )
         .bind(plan_id.to_string())
@@ -241,6 +305,12 @@ impl PlannerService for OcPlanner {
                 let issue_id: Option<String> = row.try_get("issue_id")?;
                 let complexity_str: String = row.try_get("estimated_complexity")?;
                 let created_at_str: String = row.try_get("created_at")?;
+                let depends_on_json: Option<String> =
+                    row.try_get("depends_on_titles").ok().flatten();
+                let depends_on: Vec<String> = depends_on_json
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok())
+                    .unwrap_or_default();
 
                 Ok(OcPlanTask {
                     id: id.parse().map_err(|_| sqlx::Error::RowNotFound)?,
@@ -248,8 +318,10 @@ impl PlannerService for OcPlanner {
                     issue_id: issue_id.and_then(|s| s.parse().ok()),
                     title: row.try_get("title")?,
                     description: row.try_get("description")?,
+                    prompt: row.try_get("prompt").ok().flatten(),
                     estimated_complexity: OcTaskComplexity::try_from(complexity_str.as_str())
                         .unwrap_or(OcTaskComplexity::Medium),
+                    depends_on,
                     order_index: row.try_get("order_index")?,
                     created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
                 })
