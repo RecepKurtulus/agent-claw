@@ -170,27 +170,27 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     Router::new()
         // Plan CRUD
         .route("/openclaw/plans", post(create_plan))
-        .route("/openclaw/plans/project/:project_id", get(list_plans))
-        .route("/openclaw/plans/:plan_id", get(get_plan))
+        .route("/openclaw/plans/project/{project_id}", get(list_plans))
+        .route("/openclaw/plans/{plan_id}", get(get_plan))
         // Orchestration
-        .route("/openclaw/plans/:plan_id/run", post(run_plan))
-        .route("/openclaw/runs/:run_id", get(get_run))
+        .route("/openclaw/plans/{plan_id}/run", post(run_plan))
+        .route("/openclaw/runs/{run_id}", get(get_run))
         // Task lifecycle
         .route(
-            "/openclaw/runs/:run_id/tasks/:task_id/start",
+            "/openclaw/runs/{run_id}/tasks/{task_id}/start",
             post(start_task),
         )
         .route(
-            "/openclaw/runs/:run_id/tasks/:task_id/prompt",
+            "/openclaw/runs/{run_id}/tasks/{task_id}/prompt",
             post(get_task_prompt),
         )
         // Dependency graph
         .route(
-            "/openclaw/plans/:plan_id/dependencies",
+            "/openclaw/plans/{plan_id}/dependencies",
             post(add_dependency),
         )
         .route(
-            "/openclaw/plans/:plan_id/dependencies",
+            "/openclaw/plans/{plan_id}/dependencies",
             get(list_dependencies),
         )
         .with_state(deployment.clone())
