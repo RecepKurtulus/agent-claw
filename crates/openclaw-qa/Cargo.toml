@@ -1,0 +1,24 @@
+[package]
+name = "openclaw-qa"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+openclaw-planner = { path = "../openclaw-planner" }
+db = { path = "../db" }
+services = { path = "../services" }
+utils = { path = "../utils" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+ts-rs = { workspace = true }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+sqlx = { version = "0.8.6", features = ["runtime-tokio", "tls-rustls-aws-lc-rs", "sqlite", "chrono", "uuid"] }
+
+[dev-dependencies]
+tempfile = "3"

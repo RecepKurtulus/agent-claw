@@ -51,6 +51,7 @@ use services::services::{
     remote_client::RemoteClient,
     remote_sync,
 };
+use openclaw_orchestrator::{NoopOcHook, OcHookService};
 use tokio::{sync::RwLock, task::JoinHandle};
 use tokio_util::io::ReaderStream;
 use utils::{
@@ -85,6 +86,7 @@ pub struct LocalContainerService {
     queued_message_service: QueuedMessageService,
     notification_service: NotificationService,
     remote_client: Option<RemoteClient>,
+    oc_hook: Arc<dyn OcHookService>,
 }
 
 impl LocalContainerService {
@@ -100,6 +102,7 @@ impl LocalContainerService {
         approvals: Approvals,
         queued_message_service: QueuedMessageService,
         remote_client: Option<RemoteClient>,
+        oc_hook: Arc<dyn OcHookService>,
     ) -> Self {
         let child_store = Arc::new(RwLock::new(HashMap::new()));
         let cancellation_tokens = Arc::new(RwLock::new(HashMap::new()));
@@ -125,6 +128,7 @@ impl LocalContainerService {
             queued_message_service,
             notification_service,
             remote_client,
+            oc_hook,
         };
 
         container.spawn_workspace_cleanup();
@@ -603,6 +607,7 @@ impl LocalContainerService {
 
                         // Manually finalize task since we're bypassing normal execution flow
                         container.finalize_task(&ctx).await;
+                        container.trigger_oc_hook(&ctx).await;
                     }
                 }
 
@@ -653,6 +658,7 @@ impl LocalContainerService {
                                 tracing::error!("Failed to start queued follow-up: {}", e);
                                 // Fall back to finalization if follow-up fails
                                 container.finalize_task(&ctx).await;
+                                container.trigger_oc_hook(&ctx).await;
                             } else {
                                 started_queued_follow_up = true;
                             }
@@ -664,9 +670,11 @@ impl LocalContainerService {
                                 ctx.execution_process.status
                             );
                             container.finalize_task(&ctx).await;
+                            container.trigger_oc_hook(&ctx).await;
                         }
                     } else {
                         container.finalize_task(&ctx).await;
+                        container.trigger_oc_hook(&ctx).await;
                     }
 
                     let should_mark_turn_unseen = matches!(
@@ -1072,6 +1080,34 @@ fn failure_exit_status() -> std::process::ExitStatus {
         ExitStatusExt::from_raw(1)
     }
 }
+
+    /// CodingAgent EP tamamlandığında OpenClaw orchestration hook'unu tetikler.
+    /// Workspace OpenClaw tarafından yönetilmiyorsa sessizce geçer.
+    async fn trigger_oc_hook(&self, ctx: &ExecutionContext) {
+        if !matches!(
+            ctx.execution_process.run_reason,
+            ExecutionProcessRunReason::CodingAgent
+        ) {
+            return;
+        }
+
+        let success = matches!(
+            ctx.execution_process.status,
+            ExecutionProcessStatus::Completed
+        );
+
+        if let Err(e) = self
+            .oc_hook
+            .on_coding_agent_completed(ctx.workspace.id, success)
+            .await
+        {
+            tracing::warn!(
+                workspace_id = %ctx.workspace.id,
+                "OpenClaw hook error: {}",
+                e
+            );
+        }
+    }
 
 #[async_trait]
 impl ContainerService for LocalContainerService {

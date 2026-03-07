@@ -3224,6 +3224,7 @@ dependencies = [
  "futures",
  "git",
  "globwalk",
+ "openclaw-orchestrator",
  "portable-pty",
  "relay-control",
  "serde_json",
@@ -3913,6 +3914,70 @@ dependencies = [
  "is-wsl",
  "libc",
  "pathdiff",
+]
+
+[[package]]
+name = "openclaw-orchestrator"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "db",
+ "openclaw-planner",
+ "serde",
+ "serde_json",
+ "services",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ts-rs 11.0.1",
+ "utils",
+ "uuid",
+]
+
+[[package]]
+name = "openclaw-planner"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "db",
+ "executors",
+ "serde",
+ "serde_json",
+ "services",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ts-rs 11.0.1",
+ "utils",
+ "uuid",
+]
+
+[[package]]
+name = "openclaw-qa"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "db",
+ "openclaw-planner",
+ "serde",
+ "serde_json",
+ "services",
+ "sqlx",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "ts-rs 11.0.1",
+ "utils",
+ "uuid",
 ]
 
 [[package]]
@@ -5244,6 +5309,9 @@ dependencies = [
  "hyper-util",
  "local-deployment",
  "mime_guess",
+ "openclaw-orchestrator",
+ "openclaw-planner",
+ "openclaw-qa",
  "os_info",
  "rand 0.8.5",
  "regex",

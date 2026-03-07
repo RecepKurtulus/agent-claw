@@ -33,6 +33,7 @@ use utils::{
 use uuid::Uuid;
 use workspace_manager::WorkspaceManager;
 use worktree_manager::WorktreeManager;
+use openclaw_orchestrator::{OcOrchestrationHook, OcHookService};
 
 use crate::{container::LocalContainerService, pty::PtyService};
 mod command;
@@ -189,6 +190,8 @@ impl Deployment for LocalDeployment {
             analytics_service: s.clone(),
         });
         let workspace_manager = WorkspaceManager::new(db.clone());
+        let oc_hook: Arc<dyn OcHookService> =
+            Arc::new(OcOrchestrationHook::new(db.clone()));
         let container = LocalContainerService::new(
             db.clone(),
             workspace_manager.clone(),
@@ -200,6 +203,7 @@ impl Deployment for LocalDeployment {
             approvals.clone(),
             queued_message_service.clone(),
             remote_client.clone().ok(),
+            oc_hook,
         )
         .await;
 

@@ -7,6 +7,7 @@ use tower_http::validate_request::ValidateRequestHeaderLayer;
 use crate::{DeploymentImpl, middleware};
 
 pub mod approvals;
+pub mod openclaw;
 pub mod config;
 pub mod containers;
 pub mod filesystem;
@@ -51,6 +52,7 @@ pub fn router(deployment: DeploymentImpl) -> IntoMakeService<Router> {
         .merge(migration::router())
         .merge(sessions::router(&deployment))
         .merge(terminal::router())
+        .merge(openclaw::router(&deployment))
         .nest("/remote", remote::router())
         .nest("/images", images::routes())
         .layer(axum::middleware::from_fn_with_state(

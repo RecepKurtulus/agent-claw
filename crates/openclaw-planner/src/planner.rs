@@ -1,0 +1,284 @@
+use anyhow::anyhow;
+use async_trait::async_trait;
+use chrono::Utc;
+use db::DBService;
+use sqlx::Row;
+use thiserror::Error;
+use uuid::Uuid;
+
+use crate::types::{
+    CreateOcPlanRequest, CreateOcPlanResponse, OcPlan, OcPlanStatus, OcPlanTask, OcTaskComplexity,
+};
+
+#[derive(Debug, Error)]
+pub enum PlannerError {
+    #[error(transparent)]
+    Db(#[from] sqlx::Error),
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+#[async_trait]
+pub trait PlannerService: Send + Sync {
+    /// Prompt'u analiz edip plan + task listesi oluşturur (DB'ye yazar).
+    async fn create_plan(
+        &self,
+        req: CreateOcPlanRequest,
+    ) -> Result<CreateOcPlanResponse, PlannerError>;
+
+    /// Plan ID'ye göre planı getirir.
+    async fn get_plan(&self, plan_id: Uuid) -> Result<Option<OcPlan>, PlannerError>;
+
+    /// Bir plana ait tüm task'ları getirir.
+    async fn get_plan_tasks(&self, plan_id: Uuid) -> Result<Vec<OcPlanTask>, PlannerError>;
+
+    /// Tüm planları getirir (proje bazlı).
+    async fn list_plans(&self, project_id: Uuid) -> Result<Vec<OcPlan>, PlannerError>;
+
+    /// Plan durumunu günceller.
+    async fn update_plan_status(
+        &self,
+        plan_id: Uuid,
+        status: OcPlanStatus,
+    ) -> Result<(), PlannerError>;
+}
+
+pub struct OcPlanner {
+    db: DBService,
+}
+
+impl OcPlanner {
+    pub fn new(db: DBService) -> Self {
+        Self { db }
+    }
+
+    /// Prompt'tan yapılandırılmış task listesi üretir.
+    /// Şu an kural tabanlı parsing yapar; ileride LLM executor entegre edilebilir.
+    fn parse_tasks_from_prompt(prompt: &str) -> Vec<(String, String, OcTaskComplexity)> {
+        // Her satır bir görev olarak kabul et (basit başlangıç implementasyonu).
+        // LLM entegrasyonu sonradan buraya eklenecek.
+        prompt
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .enumerate()
+            .map(|(_, line)| {
+                let title = line.trim().to_string();
+                let description = format!("Implement: {}", title);
+                let complexity = if title.len() > 80 {
+                    OcTaskComplexity::High
+                } else if title.len() > 40 {
+                    OcTaskComplexity::Medium
+                } else {
+                    OcTaskComplexity::Low
+                };
+                (title, description, complexity)
+            })
+            .collect()
+    }
+}
+
+#[async_trait]
+impl PlannerService for OcPlanner {
+    async fn create_plan(
+        &self,
+        req: CreateOcPlanRequest,
+    ) -> Result<CreateOcPlanResponse, PlannerError> {
+        let plan_id = Uuid::new_v4();
+        let now = Utc::now();
+
+        // Plan kaydını oluştur
+        sqlx::query(
+            "INSERT INTO oc_plans (id, project_id, prompt, status, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(plan_id.to_string())
+        .bind(req.project_id.to_string())
+        .bind(&req.prompt)
+        .bind(OcPlanStatus::Analyzing.as_str())
+        .bind(now.to_rfc3339())
+        .bind(now.to_rfc3339())
+        .execute(&self.db.pool)
+        .await?;
+
+        // Prompt'tan task'ları üret
+        let raw_tasks = Self::parse_tasks_from_prompt(&req.prompt);
+        let mut tasks = Vec::new();
+
+        for (index, (title, description, complexity)) in raw_tasks.into_iter().enumerate() {
+            let task_id = Uuid::new_v4();
+            sqlx::query(
+                "INSERT INTO oc_plan_tasks (id, plan_id, title, description, estimated_complexity, order_index, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
+            )
+            .bind(task_id.to_string())
+            .bind(plan_id.to_string())
+            .bind(&title)
+            .bind(&description)
+            .bind(complexity.as_str())
+            .bind(index as i64)
+            .bind(now.to_rfc3339())
+            .execute(&self.db.pool)
+            .await?;
+
+            tasks.push(OcPlanTask {
+                id: task_id,
+                plan_id,
+                issue_id: None,
+                title,
+                description,
+                estimated_complexity: complexity,
+                order_index: index as i64,
+                created_at: now,
+            });
+        }
+
+        // Status'u ready'e geçir
+        sqlx::query("UPDATE oc_plans SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(OcPlanStatus::Ready.as_str())
+            .bind(Utc::now().to_rfc3339())
+            .bind(plan_id.to_string())
+            .execute(&self.db.pool)
+            .await?;
+
+        let plan = OcPlan {
+            id: plan_id,
+            project_id: req.project_id,
+            prompt: req.prompt,
+            status: OcPlanStatus::Ready,
+            created_at: now,
+            updated_at: Utc::now(),
+        };
+
+        Ok(CreateOcPlanResponse { plan, tasks })
+    }
+
+    async fn get_plan(&self, plan_id: Uuid) -> Result<Option<OcPlan>, PlannerError> {
+        let row = sqlx::query(
+            "SELECT id, project_id, prompt, status, created_at, updated_at FROM oc_plans WHERE id = ?",
+        )
+        .bind(plan_id.to_string())
+        .fetch_optional(&self.db.pool)
+        .await?;
+
+        let Some(row) = row else { return Ok(None) };
+
+        let id: String = row.try_get("id")?;
+        let project_id: String = row.try_get("project_id")?;
+        let status_str: String = row.try_get("status")?;
+        let created_at_str: String = row.try_get("created_at")?;
+        let updated_at_str: String = row.try_get("updated_at")?;
+
+        Ok(Some(OcPlan {
+            id: id
+                .parse()
+                .map_err(|e| PlannerError::Other(anyhow!("{}", e)))?,
+            project_id: project_id
+                .parse()
+                .map_err(|e| PlannerError::Other(anyhow!("{}", e)))?,
+            prompt: row.try_get("prompt")?,
+            status: OcPlanStatus::try_from(status_str.as_str()).map_err(PlannerError::Other)?,
+            created_at: created_at_str
+                .parse()
+                .map_err(|e| PlannerError::Other(anyhow!("{}", e)))?,
+            updated_at: updated_at_str
+                .parse()
+                .map_err(|e| PlannerError::Other(anyhow!("{}", e)))?,
+        }))
+    }
+
+    async fn get_plan_tasks(&self, plan_id: Uuid) -> Result<Vec<OcPlanTask>, PlannerError> {
+        let rows = sqlx::query(
+            "SELECT id, plan_id, issue_id, title, description, estimated_complexity, order_index, created_at
+             FROM oc_plan_tasks WHERE plan_id = ? ORDER BY order_index ASC",
+        )
+        .bind(plan_id.to_string())
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.try_get("id")?;
+                let plan_id: String = row.try_get("plan_id")?;
+                let issue_id: Option<String> = row.try_get("issue_id")?;
+                let complexity_str: String = row.try_get("estimated_complexity")?;
+                let created_at_str: String = row.try_get("created_at")?;
+
+                Ok(OcPlanTask {
+                    id: id.parse().map_err(|_| sqlx::Error::RowNotFound)?,
+                    plan_id: plan_id.parse().map_err(|_| sqlx::Error::RowNotFound)?,
+                    issue_id: issue_id.and_then(|s| s.parse().ok()),
+                    title: row.try_get("title")?,
+                    description: row.try_get("description")?,
+                    estimated_complexity: OcTaskComplexity::try_from(complexity_str.as_str())
+                        .unwrap_or(OcTaskComplexity::Medium),
+                    order_index: row.try_get("order_index")?,
+                    created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                })
+            })
+            .collect()
+    }
+
+    async fn list_plans(&self, project_id: Uuid) -> Result<Vec<OcPlan>, PlannerError> {
+        let rows = sqlx::query(
+            "SELECT id, project_id, prompt, status, created_at, updated_at
+             FROM oc_plans WHERE project_id = ? ORDER BY created_at DESC",
+        )
+        .bind(project_id.to_string())
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        rows.into_iter()
+            .map(|row| {
+                let id: String = row.try_get("id")?;
+                let project_id: String = row.try_get("project_id")?;
+                let status_str: String = row.try_get("status")?;
+                let created_at_str: String = row.try_get("created_at")?;
+                let updated_at_str: String = row.try_get("updated_at")?;
+
+                Ok(OcPlan {
+                    id: id.parse().map_err(|_| sqlx::Error::RowNotFound)?,
+                    project_id: project_id.parse().map_err(|_| sqlx::Error::RowNotFound)?,
+                    prompt: row.try_get("prompt")?,
+                    status: OcPlanStatus::try_from(status_str.as_str())
+                        .unwrap_or(OcPlanStatus::Pending),
+                    created_at: created_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                    updated_at: updated_at_str.parse().unwrap_or_else(|_| Utc::now()),
+                })
+            })
+            .collect()
+    }
+
+    async fn update_plan_status(
+        &self,
+        plan_id: Uuid,
+        status: OcPlanStatus,
+    ) -> Result<(), PlannerError> {
+        sqlx::query("UPDATE oc_plans SET status = ?, updated_at = ? WHERE id = ?")
+            .bind(status.as_str())
+            .bind(Utc::now().to_rfc3339())
+            .bind(plan_id.to_string())
+            .execute(&self.db.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_tasks_from_prompt() {
+        let prompt = "Kullanıcı giriş sistemi yaz\nAPI endpoint'lerini ekle\nTestleri yaz";
+        let tasks = OcPlanner::parse_tasks_from_prompt(prompt);
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[0].0, "Kullanıcı giriş sistemi yaz");
+    }
+
+    #[test]
+    fn test_parse_tasks_empty_lines_filtered() {
+        let prompt = "Task 1\n\n\nTask 2\n";
+        let tasks = OcPlanner::parse_tasks_from_prompt(prompt);
+        assert_eq!(tasks.len(), 2);
+    }
+}

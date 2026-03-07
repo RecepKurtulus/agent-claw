@@ -13,6 +13,7 @@ server-info = { path = "../server-info" }
 services = { path = "../services" }
 worktree-manager = { path = "../worktree-manager" }
 workspace-manager = { path = "../workspace-manager" }
+openclaw-orchestrator = { path = "../openclaw-orchestrator" }
 utils = { path = "../utils" }
 git = { path = "../git" }
 trusted-key-auth = { path = "../trusted-key-auth" }

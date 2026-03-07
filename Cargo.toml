@@ -18,6 +18,9 @@ members = [
     "crates/local-deployment",
     "crates/deployment",
     "crates/review",
+    "crates/openclaw-planner",
+    "crates/openclaw-orchestrator",
+    "crates/openclaw-qa",
 ]
 exclude = ["crates/remote", "crates/relay-tunnel"]
 
