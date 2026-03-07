@@ -58,6 +58,15 @@ pub trait OrchestratorService: Send + Sync {
 
     /// Bir task başarısız olduğunda çağrılır.
     async fn on_task_failed(&self, run_id: Uuid, task_id: Uuid) -> Result<(), OrchestratorError>;
+
+    /// Tamamlanmış bağımlılıkların özetlerini başına ekleyerek task için tam prompt döner.
+    /// `base_prompt` None ise oc_plan_tasks.prompt kullanılır.
+    async fn get_prompt_for_task(
+        &self,
+        run_id: Uuid,
+        task_id: Uuid,
+        base_prompt: Option<&str>,
+    ) -> Result<String, OrchestratorError>;
 }
 
 pub struct OcOrchestrator {
@@ -431,5 +440,69 @@ impl OrchestratorService for OcOrchestrator {
         .await?;
 
         Ok(())
+    }
+
+    async fn get_prompt_for_task(
+        &self,
+        run_id: Uuid,
+        task_id: Uuid,
+        base_prompt: Option<&str>,
+    ) -> Result<String, OrchestratorError> {
+        // Görevin kendi prompt'unu al (base_prompt verilmemişse DB'den çek)
+        let task_prompt = if let Some(p) = base_prompt {
+            p.to_string()
+        } else {
+            let row = sqlx::query("SELECT prompt FROM oc_plan_tasks WHERE id = ?")
+                .bind(task_id.to_string())
+                .fetch_optional(&self.db.pool)
+                .await?;
+            match row {
+                Some(r) => r
+                    .try_get::<Option<String>, _>("prompt")?
+                    .unwrap_or_default(),
+                None => String::new(),
+            }
+        };
+
+        // Bağımlılıklardan tamamlanmış özetleri topla
+        let dep_rows = sqlx::query(
+            "SELECT pt.title, trs.context_summary
+             FROM oc_task_run_state trs
+             JOIN oc_plan_tasks pt ON pt.id = trs.task_id
+             WHERE trs.run_id = ?
+               AND trs.task_id IN (
+                   SELECT depends_on_task_id
+                   FROM oc_task_dependencies
+                   WHERE task_id = ?
+               )
+               AND trs.status = 'completed'
+               AND trs.context_summary IS NOT NULL
+             ORDER BY trs.completed_at ASC",
+        )
+        .bind(run_id.to_string())
+        .bind(task_id.to_string())
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        if dep_rows.is_empty() {
+            return Ok(task_prompt);
+        }
+
+        let mut context_lines = Vec::new();
+        for row in dep_rows {
+            let title: String = row
+                .try_get("title")
+                .unwrap_or_else(|_| "Önceki adım".into());
+            let summary: String = row
+                .try_get::<Option<String>, _>("context_summary")
+                .unwrap_or_default()
+                .unwrap_or_default();
+            context_lines.push(format!("- {title}: {summary}"));
+        }
+
+        let context_block = context_lines.join("\n");
+        Ok(format!(
+            "Önceki adımlarda yapılanlar:\n{context_block}\n\nŞimdi senin görevin:\n{task_prompt}"
+        ))
     }
 }

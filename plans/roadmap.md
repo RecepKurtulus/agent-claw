@@ -42,7 +42,7 @@ Sen → diff'i incele → onayla → merge
 - QA geçerse → workspace "InReview" statüsüne çekilsin
 - QA başarısızsa → `CodingAgentFollowUpRequest` olarak agent'a geri fırlatılsın
 
-### 1.3 Context Injection
+### 1.3 Context Injection ✅
 - Tamamlanan task'ın `execution_process_logs` sonunda özet üretilsin
 - Bu özet `oc_task_run_state.context_summary`'ye yazılsın
 - Bir sonraki task başlatılırken prompt'un başına eklensin:

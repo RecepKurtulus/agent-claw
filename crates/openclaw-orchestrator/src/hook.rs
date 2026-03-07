@@ -80,6 +80,21 @@ impl OcOrchestrationHook {
             task_id.parse().unwrap_or_else(|_| Uuid::nil()),
         )))
     }
+
+    /// Bir EP'e ait CodingAgentTurn'ün son özetini getirir.
+    async fn fetch_execution_summary(&self, execution_process_id: Uuid) -> Option<String> {
+        let row = sqlx::query(
+            "SELECT summary FROM coding_agent_turns
+             WHERE execution_process_id = ? AND summary IS NOT NULL
+             ORDER BY created_at DESC LIMIT 1",
+        )
+        .bind(execution_process_id.to_string())
+        .fetch_optional(&self.db.pool)
+        .await
+        .ok()??;
+
+        row.try_get::<Option<String>, _>("summary").ok()?
+    }
 }
 
 #[async_trait]
@@ -131,8 +146,9 @@ impl OcHookService for OcOrchestrationHook {
                     workspace_id = %workspace_id,
                     "No test command found — skipping QA, marking task completed"
                 );
+                let summary = self.fetch_execution_summary(execution_process_id).await;
                 let unblocked = orchestrator
-                    .on_task_completed(run_id, task_id, None)
+                    .on_task_completed(run_id, task_id, summary)
                     .await?;
                 return Ok(OcHookResult::QaSkipped { unblocked });
             }
@@ -140,8 +156,16 @@ impl OcHookService for OcOrchestrationHook {
             Ok(outcome) => match outcome {
                 QaOutcome::Passed => {
                     tracing::info!(workspace_id = %workspace_id, "QA passed");
+                    let summary = self.fetch_execution_summary(execution_process_id).await;
+                    if let Some(ref s) = summary {
+                        tracing::debug!(
+                            workspace_id = %workspace_id,
+                            summary_len = s.len(),
+                            "Attaching execution summary to task state"
+                        );
+                    }
                     let unblocked = orchestrator
-                        .on_task_completed(run_id, task_id, None)
+                        .on_task_completed(run_id, task_id, summary)
                         .await?;
                     Ok(OcHookResult::QaPassed { unblocked })
                 }
