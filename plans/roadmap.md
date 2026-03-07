@@ -99,7 +99,7 @@ bağımlılıklı ticket listesi çıkar.
 
 **Hedef:** Kullanıcı planı görsün, yönetsin, onaylasın.
 
-### 3.1 Plan Oluşturma Ekranı
+### 3.1 Plan Oluşturma Ekranı ✅
 - Mevcut Kanban UI'ına "OpenClaw" butonu eklenir
 - Prompt input + proje seçimi
 - "Analiz Et" → yükleniyor → task listesi önizlemesi

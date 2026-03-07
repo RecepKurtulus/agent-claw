@@ -25,7 +25,8 @@ import {
   bulkUpdateIssues,
   type BulkUpdateIssueItem,
 } from '@/shared/lib/remoteApi';
-import { PlusIcon, DotsThreeIcon } from '@phosphor-icons/react';
+import { PlusIcon, DotsThreeIcon, BrainIcon } from '@phosphor-icons/react';
+import { OpenClawDialog } from '@/pages/openclaw/OpenClawDialog';
 import { Actions } from '@/shared/actions';
 import {
   buildKanbanIssueComposerKey,
@@ -801,6 +802,17 @@ export function KanbanContainer() {
           <h2 className={cn('text-2xl font-medium', isMobile && 'text-lg')}>
             {projectName}
           </h2>
+
+          {/* OpenClaw planner button */}
+          <button
+            type="button"
+            onClick={() => OpenClawDialog.show({ projectId })}
+            className="p-half rounded-sm text-low hover:text-brand hover:bg-brand/10 transition-colors"
+            aria-label="OpenClaw planner"
+            title="OpenClaw — Otomatik plan oluştur"
+          >
+            <BrainIcon className="size-icon-sm" weight="duotone" />
+          </button>
 
           <DropdownMenu>
             <DropdownMenuTrigger asChild>

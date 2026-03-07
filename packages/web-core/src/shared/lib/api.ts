@@ -1542,3 +1542,21 @@ export const searchApi = {
     return handleApiResponse<SearchResult[]>(response);
   },
 };
+
+// OpenClaw planner API
+import type {
+  CreateOcPlanRequest,
+  CreateOcPlanResponse,
+} from '@/pages/openclaw/oc-types';
+
+export const openclawApi = {
+  createPlan: async (
+    data: CreateOcPlanRequest
+  ): Promise<CreateOcPlanResponse> => {
+    const response = await makeRequest('/api/openclaw/plans', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+    return handleApiResponse<CreateOcPlanResponse>(response);
+  },
+};
