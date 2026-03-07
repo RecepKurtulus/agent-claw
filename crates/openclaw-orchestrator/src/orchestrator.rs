@@ -11,8 +11,8 @@ use uuid::Uuid;
 use crate::{
     dependency_graph::DependencyGraph,
     types::{
-        OcOrchestrationRun, OcOrchestrationRunStatus, OcTaskDependency, OcTaskRunState,
-        OcTaskRunStatus, RunPlanRequest,
+        OcOrchestrationRun, OcOrchestrationRunStatus, OcRunDetail, OcRunTaskDetail,
+        OcTaskDependency, OcTaskRunState, OcTaskRunStatus, RunPlanRequest,
     },
 };
 
@@ -75,6 +75,15 @@ pub trait OrchestratorService: Send + Sync {
         task_id: Uuid,
         base_prompt: Option<&str>,
     ) -> Result<String, OrchestratorError>;
+
+    /// Panel için run detayını (task başlıkları + QA bilgisi dahil) döner.
+    async fn get_run_detail(&self, run_id: Uuid) -> Result<OcRunDetail, OrchestratorError>;
+
+    /// Run'ı iptal eder; tüm bekleyen/çalışan task'ları cancelled yapar.
+    async fn cancel_run(&self, run_id: Uuid) -> Result<(), OrchestratorError>;
+
+    /// Başarısız bir task'ı pending'e sıfırlar.
+    async fn retry_task(&self, run_id: Uuid, task_id: Uuid) -> Result<(), OrchestratorError>;
 }
 
 pub struct OcOrchestrator {
@@ -542,5 +551,180 @@ impl OrchestratorService for OcOrchestrator {
         Ok(format!(
             "Önceki adımlarda yapılanlar:\n{context_block}\n\nŞimdi senin görevin:\n{task_prompt}"
         ))
+    }
+
+    async fn get_run_detail(&self, run_id: Uuid) -> Result<OcRunDetail, OrchestratorError> {
+        // Run kaydını çek
+        let run_row = sqlx::query(
+            "SELECT plan_id, status, started_at, completed_at
+             FROM oc_orchestration_runs WHERE id = ?",
+        )
+        .bind(run_id.to_string())
+        .fetch_one(&self.db.pool)
+        .await?;
+
+        let plan_id_str: String = run_row.try_get("plan_id")?;
+        let plan_id: Uuid = plan_id_str
+            .parse()
+            .map_err(|e| OrchestratorError::Other(anyhow!("{}", e)))?;
+        let run_status_str: String = run_row.try_get("status")?;
+        let run_status = OcOrchestrationRunStatus::try_from(run_status_str.as_str())
+            .unwrap_or(OcOrchestrationRunStatus::Running);
+        let run_started_at: Option<String> = run_row.try_get("started_at")?;
+        let run_completed_at: Option<String> = run_row.try_get("completed_at")?;
+
+        // Task state'leri + plan task başlıkları
+        let state_rows = sqlx::query(
+            "SELECT trs.task_id, trs.status, trs.blocked_by, trs.workspace_id,
+                    trs.context_summary, trs.started_at, trs.completed_at,
+                    pt.title, pt.description
+             FROM oc_task_run_state trs
+             JOIN oc_plan_tasks pt ON pt.id = trs.task_id
+             WHERE trs.run_id = ?
+             ORDER BY pt.order_index ASC",
+        )
+        .bind(run_id.to_string())
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        let mut tasks = Vec::new();
+        for row in state_rows {
+            let task_id_str: String = row.try_get("task_id")?;
+            let task_id: Uuid = task_id_str
+                .parse()
+                .map_err(|e| OrchestratorError::Other(anyhow!("{}", e)))?;
+            let status_str: String = row.try_get("status")?;
+            let status =
+                OcTaskRunStatus::try_from(status_str.as_str()).unwrap_or(OcTaskRunStatus::Pending);
+            let blocked_by_json: Option<String> = row.try_get("blocked_by")?;
+            let blocked_by: Vec<Uuid> = blocked_by_json
+                .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|s| s.parse().ok())
+                .collect();
+            let workspace_id: Option<String> = row.try_get("workspace_id")?;
+            let title: String = row.try_get("title").unwrap_or_default();
+            let description: String = row
+                .try_get::<Option<String>, _>("description")?
+                .unwrap_or_default();
+            let started_at: Option<String> = row.try_get("started_at")?;
+            let completed_at: Option<String> = row.try_get("completed_at")?;
+            let context_summary: Option<String> = row.try_get("context_summary")?;
+
+            // Bu workspace'e ait en güncel QA run bilgisi
+            let (qa_retry_count, qa_max_retries, qa_status, qa_last_error) =
+                if let Some(ref ws_id) = workspace_id {
+                    let qa_row = sqlx::query(
+                        "SELECT retry_count, max_retries, status FROM oc_qa_runs
+                         WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 1",
+                    )
+                    .bind(ws_id)
+                    .fetch_optional(&self.db.pool)
+                    .await?;
+
+                    if let Some(q) = qa_row {
+                        let rc: i64 = q.try_get("retry_count").unwrap_or(0);
+                        let mr: i64 = q.try_get("max_retries").unwrap_or(3);
+                        let qs: String = q.try_get("status").unwrap_or_default();
+                        let qa_run_id_row = sqlx::query(
+                            "SELECT id FROM oc_qa_runs
+                             WHERE workspace_id = ? ORDER BY created_at DESC LIMIT 1",
+                        )
+                        .bind(ws_id)
+                        .fetch_optional(&self.db.pool)
+                        .await?;
+                        let last_err = if let Some(id_row) = qa_run_id_row {
+                            let qa_run_id: String = id_row.try_get("id").unwrap_or_default();
+                            sqlx::query_scalar::<_, Option<String>>(
+                                "SELECT output FROM oc_qa_results
+                                 WHERE qa_run_id = ? AND passed = 0
+                                 ORDER BY attempt_number DESC LIMIT 1",
+                            )
+                            .bind(qa_run_id)
+                            .fetch_optional(&self.db.pool)
+                            .await?
+                            .flatten()
+                        } else {
+                            None
+                        };
+                        (rc, mr, Some(qs), last_err)
+                    } else {
+                        (0, 3, None, None)
+                    }
+                } else {
+                    (0, 3, None, None)
+                };
+
+            tasks.push(OcRunTaskDetail {
+                task_id,
+                task_title: title,
+                task_description: description,
+                status,
+                blocked_by,
+                workspace_id: workspace_id.and_then(|s| s.parse().ok()),
+                context_summary,
+                started_at: started_at.and_then(|s| s.parse().ok()),
+                completed_at: completed_at.and_then(|s| s.parse().ok()),
+                qa_retry_count,
+                qa_max_retries,
+                qa_status,
+                qa_last_error,
+            });
+        }
+
+        Ok(OcRunDetail {
+            run_id,
+            plan_id,
+            run_status,
+            started_at: run_started_at.and_then(|s| s.parse().ok()),
+            completed_at: run_completed_at.and_then(|s| s.parse().ok()),
+            tasks,
+        })
+    }
+
+    async fn cancel_run(&self, run_id: Uuid) -> Result<(), OrchestratorError> {
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE oc_task_run_state SET status = 'failed'
+             WHERE run_id = ? AND status IN ('pending', 'blocked', 'running')",
+        )
+        .bind(run_id.to_string())
+        .execute(&self.db.pool)
+        .await?;
+
+        sqlx::query(
+            "UPDATE oc_orchestration_runs SET status = 'cancelled', completed_at = ?
+             WHERE id = ?",
+        )
+        .bind(now.to_rfc3339())
+        .bind(run_id.to_string())
+        .execute(&self.db.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn retry_task(&self, run_id: Uuid, task_id: Uuid) -> Result<(), OrchestratorError> {
+        sqlx::query(
+            "UPDATE oc_task_run_state
+             SET status = 'pending', started_at = NULL, completed_at = NULL
+             WHERE run_id = ? AND task_id = ? AND status = 'failed'",
+        )
+        .bind(run_id.to_string())
+        .bind(task_id.to_string())
+        .execute(&self.db.pool)
+        .await?;
+
+        // Run hala aktif sayılır
+        sqlx::query(
+            "UPDATE oc_orchestration_runs SET status = 'running', completed_at = NULL
+             WHERE id = ? AND status IN ('failed', 'cancelled')",
+        )
+        .bind(run_id.to_string())
+        .execute(&self.db.pool)
+        .await?;
+
+        Ok(())
     }
 }

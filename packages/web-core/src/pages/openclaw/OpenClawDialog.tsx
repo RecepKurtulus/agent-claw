@@ -5,6 +5,7 @@ import {
   WarningCircleIcon,
   ListBulletsIcon,
   GraphIcon,
+  PlayIcon,
 } from '@phosphor-icons/react';
 import { create, useModal } from '@ebay/nice-modal-react';
 import {
@@ -21,6 +22,8 @@ import { useCreateOcPlan } from './hooks/useCreateOcPlan';
 import { DuplicationWarnings } from './components/DuplicationWarnings';
 import { PlanTaskList } from './components/PlanTaskList';
 import { DependencyGraph } from './components/DependencyGraph';
+import { RunMonitorPanel } from './components/RunMonitorPanel';
+import { openclawApi } from '@/shared/lib/api';
 import type { OcPlanTask, CreateOcPlanResponse } from './oc-types';
 
 // ── Dialog props ───────────────────────────────────────────────────────────
@@ -32,7 +35,7 @@ export interface OpenClawDialogProps {
 
 // ── Step types ─────────────────────────────────────────────────────────────
 
-type Step = 'idle' | 'loading' | 'result' | 'error';
+type Step = 'idle' | 'loading' | 'result' | 'running' | 'error';
 
 // ── Dialog implementation ──────────────────────────────────────────────────
 
@@ -45,6 +48,7 @@ function OpenClawDialogImpl({ projectId, repoPaths }: OpenClawDialogProps) {
   const [result, setResult] = useState<CreateOcPlanResponse | null>(null);
   const [draftTasks, setDraftTasks] = useState<OcPlanTask[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const [runId, setRunId] = useState<string | null>(null);
 
   const handleAnalyze = useCallback(async () => {
     if (!prompt.trim()) return;
@@ -66,10 +70,20 @@ function OpenClawDialogImpl({ projectId, repoPaths }: OpenClawDialogProps) {
     }
   }, [prompt, projectId, repoPaths, createPlan]);
 
-  const handleConfirm = useCallback(() => {
-    modal.resolve(draftTasks);
-    modal.hide();
-  }, [modal, draftTasks]);
+  const handleConfirm = useCallback(async () => {
+    if (!result) return;
+    setStep('loading');
+    try {
+      const run = await openclawApi.runPlan(result.plan.id);
+      setRunId(run.id);
+      setStep('running');
+    } catch (err) {
+      setErrorMessage(
+        err instanceof Error ? err.message : 'Run başlatılamadı.'
+      );
+      setStep('error');
+    }
+  }, [result]);
 
   const handleBack = useCallback(() => {
     setStep('idle');
@@ -120,6 +134,11 @@ function OpenClawDialogImpl({ projectId, repoPaths }: OpenClawDialogProps) {
             />
           )}
 
+          {/* ── Step: running ── */}
+          {step === 'running' && runId && result && (
+            <RunMonitorPanel runId={runId} planId={result.plan.id} />
+          )}
+
           {/* ── Step: error ── */}
           {step === 'error' && (
             <ErrorStep message={errorMessage} onRetry={handleBack} />
@@ -136,13 +155,26 @@ function OpenClawDialogImpl({ projectId, repoPaths }: OpenClawDialogProps) {
           {step === 'result' && (
             <p className="text-xs text-low">{draftTasks.length} görev hazır</p>
           )}
+          {step === 'running' && (
+            <p className="text-xs text-low">Canlı takip aktif</p>
+          )}
           <div className="flex items-center gap-2 ml-auto">
             <button
               type="button"
-              onClick={step === 'result' ? handleBack : modal.hide}
+              onClick={
+                step === 'result' || step === 'running'
+                  ? step === 'running'
+                    ? modal.hide
+                    : handleBack
+                  : modal.hide
+              }
               className="px-3 py-1.5 rounded-md text-sm text-low hover:text-normal hover:bg-secondary transition-colors"
             >
-              {step === 'result' ? 'Geri' : 'İptal'}
+              {step === 'result'
+                ? 'Geri'
+                : step === 'running'
+                  ? 'Kapat'
+                  : 'İptal'}
             </button>
 
             {step === 'idle' && (
@@ -156,7 +188,8 @@ function OpenClawDialogImpl({ projectId, repoPaths }: OpenClawDialogProps) {
                 onClick={handleConfirm}
                 disabled={draftTasks.length === 0}
               >
-                Planı Onayla ({draftTasks.length})
+                <PlayIcon className="size-3.5" weight="bold" />
+                Planı Çalıştır ({draftTasks.length})
               </PrimaryButton>
             )}
           </div>

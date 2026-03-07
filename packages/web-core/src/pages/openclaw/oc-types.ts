@@ -49,6 +49,58 @@ export type OcCodebaseContext = {
   summary: string;
 };
 
+export type OcTaskRunStatus =
+  | 'pending'
+  | 'blocked'
+  | 'running'
+  | 'completed'
+  | 'failed';
+
+export type OcOrchestrationRunStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type OcRunTaskDetail = {
+  task_id: string;
+  task_title: string;
+  task_description: string;
+  status: OcTaskRunStatus;
+  blocked_by: string[];
+  workspace_id?: string;
+  context_summary?: string;
+  started_at?: string;
+  completed_at?: string;
+  qa_retry_count: number;
+  qa_max_retries: number;
+  qa_status?: string;
+  qa_last_error?: string;
+};
+
+export type OcRunDetail = {
+  run_id: string;
+  plan_id: string;
+  run_status: OcOrchestrationRunStatus;
+  started_at?: string;
+  completed_at?: string;
+  tasks: OcRunTaskDetail[];
+};
+
+export type RunPlanRequest = {
+  plan_id: string;
+};
+
+export type RunPlanResponse = {
+  id: string;
+  plan_id: string;
+  status: OcOrchestrationRunStatus;
+  started_at?: string;
+  completed_at?: string;
+  created_at: string;
+};
+
 export type CreateOcPlanRequest = {
   project_id: string;
   prompt: string;

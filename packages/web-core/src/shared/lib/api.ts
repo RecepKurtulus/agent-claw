@@ -1547,6 +1547,9 @@ export const searchApi = {
 import type {
   CreateOcPlanRequest,
   CreateOcPlanResponse,
+  OcRunDetail,
+  RunPlanRequest,
+  RunPlanResponse,
 } from '@/pages/openclaw/oc-types';
 
 export const openclawApi = {
@@ -1558,5 +1561,36 @@ export const openclawApi = {
       body: JSON.stringify(data),
     });
     return handleApiResponse<CreateOcPlanResponse>(response);
+  },
+
+  runPlan: async (planId: string): Promise<RunPlanResponse> => {
+    const body: RunPlanRequest = { plan_id: planId };
+    const response = await makeRequest(`/api/openclaw/plans/${planId}/run`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return handleApiResponse<RunPlanResponse>(response);
+  },
+
+  getRunDetail: async (runId: string): Promise<OcRunDetail> => {
+    const response = await makeRequest(`/api/openclaw/runs/${runId}/detail`, {
+      method: 'GET',
+    });
+    return handleApiResponse<OcRunDetail>(response);
+  },
+
+  cancelRun: async (runId: string): Promise<void> => {
+    const response = await makeRequest(`/api/openclaw/runs/${runId}/cancel`, {
+      method: 'POST',
+    });
+    await handleApiResponse<unknown>(response);
+  },
+
+  retryTask: async (runId: string, taskId: string): Promise<void> => {
+    const response = await makeRequest(
+      `/api/openclaw/runs/${runId}/tasks/${taskId}/retry`,
+      { method: 'POST' }
+    );
+    await handleApiResponse<unknown>(response);
   },
 };

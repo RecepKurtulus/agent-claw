@@ -6,6 +6,6 @@ pub mod types;
 pub use hook::{HookError, NoopOcHook, OcHookResult, OcHookService, OcOrchestrationHook};
 pub use orchestrator::{OcOrchestrator, OrchestratorError, OrchestratorService};
 pub use types::{
-    OcOrchestrationRun, OcOrchestrationRunStatus, OcTaskDependency, OcTaskRunState,
-    OcTaskRunStatus, RunPlanRequest,
+    OcOrchestrationRun, OcOrchestrationRunStatus, OcRunDetail, OcRunTaskDetail, OcTaskDependency,
+    OcTaskRunState, OcTaskRunStatus, RunPlanRequest,
 };

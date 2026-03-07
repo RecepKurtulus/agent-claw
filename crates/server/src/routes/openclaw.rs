@@ -6,7 +6,8 @@ use axum::{
 };
 use deployment::Deployment;
 use openclaw_orchestrator::{
-    OcOrchestrator, OcTaskDependency, RunPlanRequest, orchestrator::OrchestratorService,
+    OcOrchestrator, OcRunDetail, OcTaskDependency, RunPlanRequest,
+    orchestrator::OrchestratorService,
 };
 use openclaw_planner::{
     CreateOcPlanRequest, OcPlan, OcPlanTask, OcPlanner, planner::PlannerService,
@@ -101,6 +102,42 @@ pub async fn get_run(
     Ok(ResponseJson(ApiResponse::success(states)))
 }
 
+pub async fn get_run_detail(
+    State(deployment): State<DeploymentImpl>,
+    Path(run_id): Path<Uuid>,
+) -> Result<ResponseJson<ApiResponse<OcRunDetail>>, ApiError> {
+    let orchestrator = OcOrchestrator::new(deployment.db().clone());
+    let detail = orchestrator
+        .get_run_detail(run_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(ResponseJson(ApiResponse::success(detail)))
+}
+
+pub async fn cancel_run(
+    State(deployment): State<DeploymentImpl>,
+    Path(run_id): Path<Uuid>,
+) -> Result<ResponseJson<ApiResponse<()>>, ApiError> {
+    let orchestrator = OcOrchestrator::new(deployment.db().clone());
+    orchestrator
+        .cancel_run(run_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(ResponseJson(ApiResponse::success(())))
+}
+
+pub async fn retry_task(
+    State(deployment): State<DeploymentImpl>,
+    Path((run_id, task_id)): Path<(Uuid, Uuid)>,
+) -> Result<ResponseJson<ApiResponse<()>>, ApiError> {
+    let orchestrator = OcOrchestrator::new(deployment.db().clone());
+    orchestrator
+        .retry_task(run_id, task_id)
+        .await
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(ResponseJson(ApiResponse::success(())))
+}
+
 pub async fn add_dependency(
     State(deployment): State<DeploymentImpl>,
     Path(plan_id): Path<Uuid>,
@@ -175,10 +212,16 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         // Orchestration
         .route("/openclaw/plans/{plan_id}/run", post(run_plan))
         .route("/openclaw/runs/{run_id}", get(get_run))
+        .route("/openclaw/runs/{run_id}/detail", get(get_run_detail))
+        .route("/openclaw/runs/{run_id}/cancel", post(cancel_run))
         // Task lifecycle
         .route(
             "/openclaw/runs/{run_id}/tasks/{task_id}/start",
             post(start_task),
+        )
+        .route(
+            "/openclaw/runs/{run_id}/tasks/{task_id}/retry",
+            post(retry_task),
         )
         .route(
             "/openclaw/runs/{run_id}/tasks/{task_id}/prompt",

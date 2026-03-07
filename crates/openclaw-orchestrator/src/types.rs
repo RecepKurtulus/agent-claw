@@ -121,3 +121,34 @@ impl TryFrom<&str> for OcTaskRunStatus {
 pub struct RunPlanRequest {
     pub plan_id: Uuid,
 }
+
+/// Tek bir task'ın run sırasındaki zengin durumu (panel için)
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OcRunTaskDetail {
+    pub task_id: Uuid,
+    pub task_title: String,
+    pub task_description: String,
+    pub status: OcTaskRunStatus,
+    pub blocked_by: Vec<Uuid>,
+    pub workspace_id: Option<Uuid>,
+    pub context_summary: Option<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub qa_retry_count: i64,
+    pub qa_max_retries: i64,
+    pub qa_status: Option<String>,
+    pub qa_last_error: Option<String>,
+}
+
+/// Run panelinde gösterilecek tam run detayı
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OcRunDetail {
+    pub run_id: Uuid,
+    pub plan_id: Uuid,
+    pub run_status: OcOrchestrationRunStatus,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub tasks: Vec<OcRunTaskDetail>,
+}

@@ -105,12 +105,12 @@ bağımlılıklı ticket listesi çıkar.
 - "Analiz Et" → yükleniyor → task listesi önizlemesi
 - Kullanıcı task'ları düzenleyebilir / silebilir / ekleyebilir
 
-### 3.2 Dependency Graph Görselleştirmesi
+### 3.2 Dependency Graph Görselleştirmesi ✅
 - Task kartları arası ok çizgileri (DAG vizualizasyonu)
 - Sürükle-bırak ile bağımlılık ekle/çıkar
 - Döngü tespitinde kırmızı vurgu
 
-### 3.3 Orchestration Run Paneli
+### 3.3 Orchestration Run Paneli ✅
 - Her task'ın durumu: Pending / Blocked / Running / QA / Done / Failed
 - Hangi task hangi agent'ı çalıştırıyor
 - QA retry sayısı ve son hata mesajı
